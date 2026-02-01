@@ -1,3 +1,7 @@
+mod event;
+use crate::event::Event::Crash;
+use crate::event::{EventSource, crash_source::CrashEventSource};
+
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -100,7 +104,10 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("Exiting...");
         }
         _ = async {
-            process_events(events, stacks, output_dir).await;
+            let mut crash_source = CrashEventSource::new(events);
+            while let Some(Crash(event)) = crash_source.next_event().await {
+                handle_crash(&event, &stacks, &output_dir).await;
+            }
         } => {}
     }
 
@@ -108,29 +115,6 @@ async fn main() -> Result<(), anyhow::Error> {
     drop(bpf);
 
     Ok(())
-}
-
-async fn process_events(
-    mut events: RingBuf<aya::maps::MapData>,
-    stacks: StackTraceMap<aya::maps::MapData>,
-    output_dir: PathBuf,
-) {
-    let mut buf = [0u8; std::mem::size_of::<CrashEvent>()];
-
-    loop {
-        while let Some(item) = events.next() {
-            let data = item.as_ref();
-            if data.len() >= std::mem::size_of::<CrashEvent>() {
-                buf[..std::mem::size_of::<CrashEvent>()]
-                    .copy_from_slice(&data[..std::mem::size_of::<CrashEvent>()]);
-
-                let event: CrashEvent = unsafe { std::ptr::read(buf.as_ptr() as *const _) };
-                handle_crash(&event, &stacks, &output_dir).await;
-            }
-        }
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
 }
 
 async fn handle_crash(
