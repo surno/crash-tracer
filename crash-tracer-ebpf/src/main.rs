@@ -26,8 +26,7 @@ unsafe fn try_handle_signal(ctx: TracePointContext) -> Result<(), i64> {
     // See: /sys/kernel/debug/tracing/events/signal/signal_deliver/format
     let signal: i32 = unsafe { ctx.read_at(8)? };
 
-    info!(&ctx, "received a signal trace point: {}", signal);
-
+    // Only process crash signals - ignore normal signals like SIGCHLD (17), etc.
     if !CrashEvent::is_crash_signal(signal) {
         return Ok(());
     }
