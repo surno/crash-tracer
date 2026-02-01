@@ -16,7 +16,7 @@ pub struct SchedExecEvent {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct CrashEvent {
+pub struct SignalDeliverEvent {
     // process information
     pub pid: u32,
     pub tid: u32,
@@ -54,7 +54,7 @@ pub struct CrashEvent {
     pub user_stack_id: i64,
 }
 
-impl CrashEvent {
+impl SignalDeliverEvent {
     pub const fn zeroed() -> Self {
         Self {
             pid: 0,
@@ -93,4 +93,4 @@ impl CrashEvent {
 }
 
 #[cfg(feature = "user")]
-unsafe impl aya::Pod for CrashEvent {}
+unsafe impl aya::Pod for SignalDeliverEvent {}

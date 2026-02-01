@@ -1,8 +1,8 @@
 mod event;
-use crate::event::Event::Crash;
+use crate::event::Event::SignalDeliver;
 use crate::event::Event::SchedExec;
 use crate::event::sched_exec_source::SchedExecEventSource;
-use crate::event::{EventSource, crash_source::CrashEventSource};
+use crate::event::{EventSource, signal_deliver_source::SignalDeliverEventSource};
 
 use std::path::PathBuf;
 
@@ -13,7 +13,7 @@ use aya::{
 };
 use aya_log::EbpfLogger;
 use clap::Parser;
-use crash_tracer_common::CrashEvent;
+use crash_tracer_common::SignalDeliverEvent;
 use log::{info, warn};
 use tokio::signal;
 
@@ -102,8 +102,8 @@ async fn main() -> Result<(), anyhow::Error> {
     std::fs::create_dir_all(&args.output_dir)?;
 
     // Get handles to maps
-    let crash_events = RingBuf::try_from(bpf.take_map("EVENTS").unwrap())?;
-    let stacks = StackTraceMap::try_from(bpf.take_map("STACKS").unwrap())?;
+    let signal_deliver_events = RingBuf::try_from(bpf.take_map("SIGNAL_DELIVER_EVENTS").unwrap())?;
+    let signal_deliver_stacks = StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
     let sched_exec_events = RingBuf::try_from(bpf.take_map("SCHED_EXEC_EVENTS").unwrap())?;
 
     // Process events in main loop instead of spawning
@@ -115,9 +115,9 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("Exiting...");
         }
         _ = async {
-            let mut crash_source = CrashEventSource::new(crash_events);
-            while let Some(Crash(event)) = crash_source.next_event().await {
-                handle_crash(&event, &stacks, &output_dir).await;
+            let mut signal_deliver_source = SignalDeliverEventSource::new(signal_deliver_events);
+            while let Some(SignalDeliver(event)) = signal_deliver_source.next_event().await {
+                handle_signal_deliver_event(&event, &signal_deliver_stacks, &output_dir).await;
             }
         } => {}
         _ = async {
@@ -134,8 +134,8 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn handle_crash(
-    event: &CrashEvent,
+async fn handle_signal_deliver_event(
+    event: &SignalDeliverEvent,
     stacks: &StackTraceMap<aya::maps::MapData>,
     output_dir: &PathBuf,
 ) {
@@ -199,7 +199,7 @@ async fn handle_crash(
 }
 
 fn save_report(
-    event: &CrashEvent,
+    event: &SignalDeliverEvent,
     stack_trace: Option<StackTrace>,
     path: &PathBuf,
 ) -> anyhow::Result<()> {

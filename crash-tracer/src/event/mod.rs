@@ -1,10 +1,10 @@
-use crash_tracer_common::{CrashEvent, SchedExecEvent};
+use crash_tracer_common::{SignalDeliverEvent, SchedExecEvent};
 
-pub mod crash_source;
+pub mod signal_deliver_source;
 pub mod sched_exec_source;
 
 pub enum Event {
-    Crash(CrashEvent),
+    SignalDeliver(SignalDeliverEvent),
     SchedExec(SchedExecEvent),
 }
 

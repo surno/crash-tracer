@@ -7,14 +7,14 @@ mod programs;
 mod vmlinux;
 
 use crate::programs::{
-    sched_process_exec::try_handle_sched_process_exec, signal::try_handle_signal,
+    sched_process_exec::try_handle_sched_process_exec, signal_deliver::try_handle_signal_deliver,
 };
 
 use aya_ebpf::{macros::tracepoint, programs::TracePointContext};
 
 #[tracepoint]
 pub fn handle_signal_deliver(ctx: TracePointContext) -> u32 {
-    match unsafe { try_handle_signal(ctx) } {
+    match unsafe { try_handle_signal_deliver(ctx) } {
         Ok(()) => 0,
         Err(e) => e as u32,
     }
