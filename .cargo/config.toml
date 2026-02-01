@@ -1,0 +1,13 @@
+[build]
+target-dir = "target"
+
+[target.bpfel-unknown-none]
+linker = "bpf-linker"
+rustflags = ["-C", "link-arg=--disable-memory-builtins"]
+
+[target.bpfeb-unknown-none]
+linker = "bpf-linker"
+rustflags = ["-C", "link-arg=--disable-memory-builtins"]
+
+[unstable]
+build-std = ["core"]
