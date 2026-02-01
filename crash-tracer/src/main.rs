@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use aya::{
-    maps::{RingBuf, StackTraceMap},
+    maps::{RingBuf, StackTraceMap, stack_trace::StackTrace},
     programs::TracePoint,
 };
 use aya_log::EbpfLogger;
@@ -22,7 +22,7 @@ struct Args {
     verbose: bool,
 }
 
-#[tokio::main] // (3)
+#[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
@@ -171,6 +171,7 @@ async fn handle_crash(
     println!("  R14: 0x{:016x}  R15:    0x{:016x}", event.r14, event.r15);
 
     // Resolve user stack if available
+    let mut stack_trace: Option<StackTrace> = None;
     if event.user_stack_id >= 0 {
         println!("\nUser Stack:");
         if let Ok(trace) = stacks.get(&(event.user_stack_id as u32), 0) {
@@ -180,6 +181,7 @@ async fn handle_crash(
                 }
                 println!("  #{:2}: 0x{:016x}", i, frame.ip);
             }
+            stack_trace = Some(trace);
         }
     }
 
@@ -188,14 +190,18 @@ async fn handle_crash(
     let filename = format!("crash_{}_{}_{}.txt", comm, event.pid, timestamp);
     let filepath = output_dir.join(&filename);
 
-    if let Err(e) = save_report(event, &filepath) {
+    if let Err(e) = save_report(event, stack_trace, &filepath) {
         log::error!("Failed to save report: {}", e);
     } else {
         println!("\nReport saved: {}", filepath.display());
     }
 }
 
-fn save_report(event: &CrashEvent, path: &PathBuf) -> anyhow::Result<()> {
+fn save_report(
+    event: &CrashEvent,
+    stack_trace: Option<StackTrace>,
+    path: &PathBuf,
+) -> anyhow::Result<()> {
     use std::io::Write;
 
     let cmd = std::str::from_utf8(&event.cmd)
@@ -247,6 +253,18 @@ fn save_report(event: &CrashEvent, path: &PathBuf) -> anyhow::Result<()> {
     writeln!(file, "R13: 0x{:016x}", event.r13)?;
     writeln!(file, "R14: 0x{:016x}", event.r14)?;
     writeln!(file, "R15: 0x{:016x}", event.r15)?;
+
+    if let Some(trace) = stack_trace {
+        writeln!(file)?;
+        writeln!(file, "User Stack:")?;
+        writeln!(file, "---------")?;
+        for (i, frame) in trace.frames().iter().enumerate() {
+            if frame.ip == 0 {
+                break;
+            }
+            writeln!(file, "  #{:2}: 0x{:016x}", i, frame.ip)?;
+        }
+    }
 
     // Read memory maps if process still exists
     if let Ok(maps) = std::fs::read_to_string(format!("/proc/{}/maps", event.pid)) {
