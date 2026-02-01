@@ -1,5 +1,7 @@
 mod event;
 use crate::event::Event::Crash;
+use crate::event::Event::SchedExec;
+use crate::event::sched_exec_source::SchedExecEventSource;
 use crate::event::{EventSource, crash_source::CrashEventSource};
 
 use std::path::PathBuf;
@@ -76,24 +78,33 @@ async fn main() -> Result<(), anyhow::Error> {
             });
         }
     }
-    info!("Attempting to load program...");
-    let program: &mut TracePoint = bpf
+    info!("Attempting to load programs...");
+    let signal_program: &mut TracePoint = bpf
         .program_mut("handle_signal_deliver")
         .unwrap()
         .try_into()?;
-    program.load()?;
-
-    program
+    signal_program.load()?;
+    signal_program
         .attach("signal", "signal_deliver")
-        .context("failed to attach tracepoint.")?;
+        .context("failed to attach signal tracepoint.")?;
 
-    info!("Crash tracer attached. Waiting for crashes...");
+    let exec_program: &mut TracePoint = bpf
+        .program_mut("handle_sched_process_exec")
+        .unwrap()
+        .try_into()?;
+    exec_program.load()?;
+    exec_program
+        .attach("sched", "sched_process_exec")
+        .context("failed to attach sched_process_exec tracepoint.")?;
+
+    info!("Programs attached. Waiting for events...");
 
     std::fs::create_dir_all(&args.output_dir)?;
 
     // Get handles to maps
-    let events = RingBuf::try_from(bpf.take_map("EVENTS").unwrap())?;
+    let crash_events = RingBuf::try_from(bpf.take_map("EVENTS").unwrap())?;
     let stacks = StackTraceMap::try_from(bpf.take_map("STACKS").unwrap())?;
+    let sched_exec_events = RingBuf::try_from(bpf.take_map("SCHED_EXEC_EVENTS").unwrap())?;
 
     // Process events in main loop instead of spawning
     // This keeps bpf alive for the entire program lifetime
@@ -104,9 +115,15 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("Exiting...");
         }
         _ = async {
-            let mut crash_source = CrashEventSource::new(events);
+            let mut crash_source = CrashEventSource::new(crash_events);
             while let Some(Crash(event)) = crash_source.next_event().await {
                 handle_crash(&event, &stacks, &output_dir).await;
+            }
+        } => {}
+        _ = async {
+            let mut sched_exec_source = SchedExecEventSource::new(sched_exec_events);
+            while let Some(SchedExec(event)) = sched_exec_source.next_event().await {
+                info!("sched_process_exec: pid={}, boottime={}", event.pid, event.boottime);
             }
         } => {}
     }

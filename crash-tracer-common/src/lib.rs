@@ -9,6 +9,13 @@ pub const SIGSEGV: i32 = 11;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct SchedExecEvent {
+    pub pid: u32,
+    pub boottime: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CrashEvent {
     // process information
     pub pid: u32,

@@ -1,6 +1,6 @@
 use aya::maps::{MapData, RingBuf};
 use crash_tracer_common::CrashEvent;
-use log::{info, warn};
+use log::warn;
 
 use crate::event::{Event, EventSource};
 
