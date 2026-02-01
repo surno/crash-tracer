@@ -2,9 +2,10 @@
 #![no_main]
 
 use aya_ebpf::{
+    bindings::BPF_F_USER_STACK,
     helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, generated::bpf_ktime_get_ns},
     macros::{map, tracepoint},
-    maps::RingBuf,
+    maps::{RingBuf, StackTrace},
     programs::TracePointContext,
 };
 use aya_log_ebpf::{info, warn};
@@ -12,6 +13,9 @@ use crash_tracer_common::CrashEvent;
 
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
+
+#[map]
+static STACKS: StackTrace = StackTrace::with_max_entries(1024, 0);
 
 #[tracepoint]
 pub fn handle_signal_deliver(ctx: TracePointContext) -> u32 {
@@ -54,6 +58,13 @@ unsafe fn try_handle_signal(ctx: TracePointContext) -> Result<(), i64> {
 
         // Process name - if this fails, just use empty name rather than failing
         (*event).cmd = bpf_get_current_comm().unwrap_or([0u8; 16]);
+
+        (*event).kernel_stack_id = STACKS
+            .get_stackid::<TracePointContext>(&ctx, 0)
+            .unwrap_or(-1);
+        (*event).user_stack_id = STACKS
+            .get_stackid::<TracePointContext>(&ctx, BPF_F_USER_STACK.into())
+            .unwrap_or(-1);
     }
 
     info!(
