@@ -1,3 +1,4 @@
+mod ebpf;
 mod event;
 mod report;
 mod state;
@@ -7,11 +8,7 @@ use crate::state::map::MemoryMap;
 
 use std::path::PathBuf;
 
-use anyhow::Context;
-use aya::{
-    maps::{RingBuf, StackTraceMap},
-    programs::TracePoint,
-};
+use aya::maps::{RingBuf, StackTraceMap};
 use aya_log::EbpfLogger;
 use clap::Parser;
 use crash_tracer_common::SignalDeliverEvent;
@@ -79,33 +76,7 @@ async fn main() -> Result<(), anyhow::Error> {
             });
         }
     }
-    info!("Attempting to load programs...");
-    let signal_program: &mut TracePoint = bpf
-        .program_mut("handle_signal_deliver")
-        .unwrap()
-        .try_into()?;
-    signal_program.load()?;
-    signal_program
-        .attach("signal", "signal_deliver")
-        .context("failed to attach signal tracepoint.")?;
-
-    let exec_program: &mut TracePoint = bpf
-        .program_mut("handle_sched_process_exec")
-        .unwrap()
-        .try_into()?;
-    exec_program.load()?;
-    exec_program
-        .attach("sched", "sched_process_exec")
-        .context("failed to attach sched_process_exec tracepoint.")?;
-
-    let exit_program: &mut TracePoint = bpf
-        .program_mut("handle_sched_process_exit")
-        .unwrap()
-        .try_into()?;
-    exit_program.load()?;
-    exit_program
-        .attach("sched", "sched_process_exit")
-        .context("failed to attach sched_process_exit tracepoint.")?;
+    ebpf::attach_tracepoints(&mut bpf)?;
 
     info!("Programs attached. Waiting for events...");
 
