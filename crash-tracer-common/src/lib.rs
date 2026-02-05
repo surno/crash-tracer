@@ -21,6 +21,7 @@ pub struct SignalDeliverEvent {
     pub pid: u32,
     pub tid: u32,
     pub cmd: [u8; 16],
+    pub boottime: u64,
 
     // Signal info
     pub signal: i32,
@@ -60,6 +61,7 @@ impl SignalDeliverEvent {
             pid: 0,
             tid: 0,
             cmd: [0u8; 16],
+            boottime: 0,
             signal: 0,
             si_code: 0,
             fault_addr: 0,

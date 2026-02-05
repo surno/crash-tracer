@@ -1,12 +1,17 @@
 use aya_ebpf::{
     bindings::BPF_F_USER_STACK,
-    helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, generated::bpf_ktime_get_ns},
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid,
+        generated::{bpf_get_current_task_btf, bpf_ktime_get_ns},
+    },
     macros::map,
     maps::{RingBuf, StackTrace},
     programs::TracePointContext,
 };
 use aya_log_ebpf::{info, warn};
 use crash_tracer_common::SignalDeliverEvent;
+
+use crate::vmlinux::task_struct;
 
 #[map]
 static SIGNAL_DELIVER_EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
@@ -36,6 +41,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
     };
 
     let event = entry.as_mut_ptr();
+    let task: *const task_struct = unsafe { bpf_get_current_task_btf() as *const task_struct };
 
     unsafe {
         let pid_tgid = bpf_get_current_pid_tgid();
@@ -44,6 +50,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         (*event).signal = signal;
         (*event).si_code = si_code;
         (*event).timestamp_ns = bpf_ktime_get_ns();
+        (*event).boottime = (*task).start_boottime;
 
         // Process name - if this fails, just use empty name rather than failing
         (*event).cmd = bpf_get_current_comm().unwrap_or([0u8; 16]);

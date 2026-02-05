@@ -1,10 +1,14 @@
 mod event;
-use crate::event::Event::SignalDeliver;
+mod state;
 use crate::event::Event::SchedExec;
+use crate::event::Event::SignalDeliver;
 use crate::event::sched_exec_source::SchedExecEventSource;
 use crate::event::{EventSource, signal_deliver_source::SignalDeliverEventSource};
+use crate::state::map::MemoryMap;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Context;
 use aya::{
@@ -103,12 +107,15 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Get handles to maps
     let signal_deliver_events = RingBuf::try_from(bpf.take_map("SIGNAL_DELIVER_EVENTS").unwrap())?;
-    let signal_deliver_stacks = StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
+    let signal_deliver_stacks =
+        StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
     let sched_exec_events = RingBuf::try_from(bpf.take_map("SCHED_EXEC_EVENTS").unwrap())?;
 
     // Process events in main loop instead of spawning
     // This keeps bpf alive for the entire program lifetime
     let output_dir = args.output_dir.clone();
+
+    let memory_map = Arc::new(Mutex::new(MemoryMap::new()));
 
     tokio::select! {
         _ = signal::ctrl_c() => {
@@ -117,13 +124,17 @@ async fn main() -> Result<(), anyhow::Error> {
         _ = async {
             let mut signal_deliver_source = SignalDeliverEventSource::new(signal_deliver_events);
             while let Some(SignalDeliver(event)) = signal_deliver_source.next_event().await {
-                handle_signal_deliver_event(&event, &signal_deliver_stacks, &output_dir).await;
+                info!("signal event: pid={}, boottime={}", event.pid, event.boottime);
+                let map = memory_map.lock().unwrap();
+                handle_signal_deliver_event(&event, &signal_deliver_stacks, &map, &output_dir).await;
             }
         } => {}
         _ = async {
             let mut sched_exec_source = SchedExecEventSource::new(sched_exec_events);
             while let Some(SchedExec(event)) = sched_exec_source.next_event().await {
-                info!("sched_process_exec: pid={}, boottime={}", event.pid, event.boottime);
+                info!("exec event: pid={}, boottime={}", event.pid, event.boottime);
+                let mut map = memory_map.lock().unwrap();
+                map.insert(event.pid, event.boottime);
             }
         } => {}
     }
@@ -137,6 +148,7 @@ async fn main() -> Result<(), anyhow::Error> {
 async fn handle_signal_deliver_event(
     event: &SignalDeliverEvent,
     stacks: &StackTraceMap<aya::maps::MapData>,
+    map: &MemoryMap,
     output_dir: &PathBuf,
 ) {
     let comm = std::str::from_utf8(&event.cmd)
@@ -191,7 +203,7 @@ async fn handle_signal_deliver_event(
     let filename = format!("crash_{}_{}_{}.txt", comm, event.pid, timestamp);
     let filepath = output_dir.join(&filename);
 
-    if let Err(e) = save_report(event, stack_trace, &filepath) {
+    if let Err(e) = save_report(event, stack_trace, map, &filepath) {
         log::error!("Failed to save report: {}", e);
     } else {
         println!("\nReport saved: {}", filepath.display());
@@ -201,6 +213,7 @@ async fn handle_signal_deliver_event(
 fn save_report(
     event: &SignalDeliverEvent,
     stack_trace: Option<StackTrace>,
+    map: &MemoryMap,
     path: &PathBuf,
 ) -> anyhow::Result<()> {
     use std::io::Write;
@@ -268,11 +281,15 @@ fn save_report(
     }
 
     // Read memory maps if process still exists
-    if let Ok(maps) = std::fs::read_to_string(format!("/proc/{}/maps", event.pid)) {
+    if let Some(maps) = map.get(event.pid, event.boottime) {
         writeln!(file)?;
         writeln!(file, "Memory Maps")?;
         writeln!(file, "-----------")?;
-        writeln!(file, "{}", maps)?;
+        for line in maps {
+            writeln!(file, "{}", line)?;
+        }
+    } else {
+        log::error!("No memory map for: {}", event.pid)
     }
 
     Ok(())

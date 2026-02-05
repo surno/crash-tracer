@@ -1,7 +1,7 @@
-use crash_tracer_common::{SignalDeliverEvent, SchedExecEvent};
+use crash_tracer_common::{SchedExecEvent, SignalDeliverEvent};
 
-pub mod signal_deliver_source;
 pub mod sched_exec_source;
+pub mod signal_deliver_source;
 
 pub enum Event {
     SignalDeliver(SignalDeliverEvent),
