@@ -1,4 +1,5 @@
 mod event;
+mod report;
 mod state;
 use crate::event::unified_source::UnifiedEventSource;
 use crate::event::{Event, EventSource};
@@ -8,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use aya::{
-    maps::{RingBuf, StackTraceMap, stack_trace::StackTrace},
+    maps::{RingBuf, StackTraceMap},
     programs::TracePoint,
 };
 use aya_log::EbpfLogger;
@@ -156,173 +157,20 @@ async fn handle_signal_deliver_event(
     event: &SignalDeliverEvent,
     stacks: &StackTraceMap<aya::maps::MapData>,
     map: &MemoryMap,
-    output_dir: &PathBuf,
+    output_dir: &std::path::Path,
 ) {
-    let comm = std::str::from_utf8(&event.cmd)
-        .unwrap_or("<unknown>")
-        .trim_end_matches('\0');
     info!("\n{}", "=".repeat(60));
     info!("CRASH DETECTED");
     info!("\n{}", "=".repeat(60));
 
-    println!("Process: {} (PID: {}, TID: {})", comm, event.pid, event.tid);
-    println!("Signal:  {} ({})", signal_name(event.signal), event.signal);
-    println!(
-        "Code:    {} ({})",
-        si_code_name(event.signal, event.si_code),
-        event.si_code
-    );
+    let stack_trace = (event.user_stack_id >= 0)
+        .then(|| stacks.get(&(event.user_stack_id as u32), 0).ok())
+        .flatten();
 
-    if event.fault_addr != 0 {
-        println!("Fault:   0x{:016x}", event.fault_addr);
-    }
-    println!("\nRegisters:");
-    println!(
-        "  RIP: 0x{:016x}  RFLAGS: 0x{:016x}",
-        event.rip, event.rflags
-    );
-    println!("  RSP: 0x{:016x}  RBP:    0x{:016x}", event.rsp, event.rbp);
-    println!("  RAX: 0x{:016x}  RBX:    0x{:016x}", event.rax, event.rbx);
-    println!("  RCX: 0x{:016x}  RDX:    0x{:016x}", event.rcx, event.rdx);
-    println!("  RSI: 0x{:016x}  RDI:    0x{:016x}", event.rsi, event.rdi);
-    println!("  R8:  0x{:016x}  R9:     0x{:016x}", event.r8, event.r9);
-    println!("  R10: 0x{:016x}  R11:    0x{:016x}", event.r10, event.r11);
-    println!("  R12: 0x{:016x}  R13:    0x{:016x}", event.r12, event.r13);
-    println!("  R14: 0x{:016x}  R15:    0x{:016x}", event.r14, event.r15);
+    report::print_to_console(event, stack_trace.as_ref());
 
-    // Resolve user stack if available
-    let mut stack_trace: Option<StackTrace> = None;
-    if event.user_stack_id >= 0 {
-        println!("\nUser Stack:");
-        if let Ok(trace) = stacks.get(&(event.user_stack_id as u32), 0) {
-            for (i, frame) in trace.frames().iter().enumerate() {
-                if frame.ip == 0 {
-                    break;
-                }
-                println!("  #{:2}: 0x{:016x}", i, frame.ip);
-            }
-            stack_trace = Some(trace);
-        }
-    }
-
-    // Save report to file
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("crash_{}_{}_{}.txt", comm, event.pid, timestamp);
-    let filepath = output_dir.join(&filename);
-
-    if let Err(e) = save_report(event, stack_trace, map, &filepath) {
-        log::error!("Failed to save report: {}", e);
-    } else {
-        println!("\nReport saved: {}", filepath.display());
-    }
-}
-
-fn save_report(
-    event: &SignalDeliverEvent,
-    stack_trace: Option<StackTrace>,
-    map: &MemoryMap,
-    path: &PathBuf,
-) -> anyhow::Result<()> {
-    use std::io::Write;
-
-    let cmd = std::str::from_utf8(&event.cmd)
-        .unwrap_or("<unknown>")
-        .trim_end_matches('\0');
-
-    let mut file = std::fs::File::create(path)?;
-
-    writeln!(file, "Crash Report")?;
-    writeln!(file, "============")?;
-    writeln!(file, "Generated: {}", chrono::Utc::now().to_rfc3339())?;
-    writeln!(file)?;
-    writeln!(file, "Process: {}", cmd)?;
-    writeln!(file, "PID: {}  TID: {}", event.pid, event.tid)?;
-    writeln!(
-        file,
-        "Signal: {} ({})",
-        signal_name(event.signal),
-        event.signal
-    )?;
-    writeln!(
-        file,
-        "Code: {} ({})",
-        si_code_name(event.signal, event.si_code),
-        event.si_code
-    )?;
-
-    if event.fault_addr != 0 {
-        writeln!(file, "Fault Address: 0x{:016x}", event.fault_addr)?;
-    }
-
-    writeln!(file)?;
-    writeln!(file, "Registers")?;
-    writeln!(file, "---------")?;
-    writeln!(file, "RIP: 0x{:016x}", event.rip)?;
-    writeln!(file, "RSP: 0x{:016x}", event.rsp)?;
-    writeln!(file, "RBP: 0x{:016x}", event.rbp)?;
-    writeln!(file, "RAX: 0x{:016x}", event.rax)?;
-    writeln!(file, "RBX: 0x{:016x}", event.rbx)?;
-    writeln!(file, "RCX: 0x{:016x}", event.rcx)?;
-    writeln!(file, "RDX: 0x{:016x}", event.rdx)?;
-    writeln!(file, "RSI: 0x{:016x}", event.rsi)?;
-    writeln!(file, "RDI: 0x{:016x}", event.rdi)?;
-    writeln!(file, "R8:  0x{:016x}", event.r8)?;
-    writeln!(file, "R9:  0x{:016x}", event.r9)?;
-    writeln!(file, "R10: 0x{:016x}", event.r10)?;
-    writeln!(file, "R11: 0x{:016x}", event.r11)?;
-    writeln!(file, "R12: 0x{:016x}", event.r12)?;
-    writeln!(file, "R13: 0x{:016x}", event.r13)?;
-    writeln!(file, "R14: 0x{:016x}", event.r14)?;
-    writeln!(file, "R15: 0x{:016x}", event.r15)?;
-
-    if let Some(trace) = stack_trace {
-        writeln!(file)?;
-        writeln!(file, "User Stack:")?;
-        writeln!(file, "---------")?;
-        for (i, frame) in trace.frames().iter().enumerate() {
-            if frame.ip == 0 {
-                break;
-            }
-            writeln!(file, "  #{:2}: 0x{:016x}", i, frame.ip)?;
-        }
-    }
-
-    // Read memory maps if process still exists
-    if let Some(maps) = map.get(event.pid, event.boottime) {
-        writeln!(file)?;
-        writeln!(file, "Memory Maps")?;
-        writeln!(file, "-----------")?;
-        for line in maps {
-            writeln!(file, "{}", line)?;
-        }
-    } else {
-        log::error!("No memory map for: {}", event.pid)
-    }
-
-    Ok(())
-}
-
-fn signal_name(sig: i32) -> &'static str {
-    match sig {
-        4 => "SIGILL",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        11 => "SIGSEGV",
-        _ => "UNKNOWN",
-    }
-}
-
-fn si_code_name(sig: i32, code: i32) -> &'static str {
-    match (sig, code) {
-        (11, 1) => "SEGV_MAPERR",
-        (11, 2) => "SEGV_ACCERR",
-        (7, 1) => "BUS_ADRALN",
-        (7, 2) => "BUS_ADRERR",
-        (8, 1) => "FPE_INTDIV",
-        (8, 2) => "FPE_INTOVF",
-        (8, 3) => "FPE_FLTDIV",
-        (4, 1) => "ILL_ILLOPC",
-        _ => "UNKNOWN",
+    match report::save_to_file(output_dir, event, stack_trace.as_ref(), map) {
+        Ok(path) => println!("\nReport saved: {}", path.display()),
+        Err(e) => log::error!("Failed to save report: {}", e),
     }
 }
