@@ -7,6 +7,46 @@ pub const SIGBUS: i32 = 7;
 pub const SIGFPE: i32 = 8;
 pub const SIGSEGV: i32 = 11;
 
+// Event type discriminant
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventType {
+    SchedExec = 0,
+    SignalDeliver = 1,
+}
+
+// Unified event for the ring buffer
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CrashTracerEvent {
+    pub tag: EventType,
+    _pad: u32, // Explicit padding for alignment
+    pub payload: EventPayload,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union EventPayload {
+    pub exec: SchedExecEvent,
+    pub signal: SignalDeliverEvent,
+}
+
+impl CrashTracerEvent {
+    pub fn as_exec(&self) -> Option<&SchedExecEvent> {
+        match self.tag {
+            EventType::SchedExec => Some(unsafe { &self.payload.exec }),
+            _ => None,
+        }
+    }
+
+    pub fn as_signal(&self) -> Option<&SignalDeliverEvent> {
+        match self.tag {
+            EventType::SignalDeliver => Some(unsafe { &self.payload.signal }),
+            _ => None,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SchedExecEvent {
@@ -96,3 +136,6 @@ impl SignalDeliverEvent {
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for SignalDeliverEvent {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for CrashTracerEvent {}

@@ -1,7 +1,6 @@
 use crash_tracer_common::{SchedExecEvent, SignalDeliverEvent};
 
-pub mod sched_exec_source;
-pub mod signal_deliver_source;
+pub mod unified_source;
 
 pub enum Event {
     SignalDeliver(SignalDeliverEvent),

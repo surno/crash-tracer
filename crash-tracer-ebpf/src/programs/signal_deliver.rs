@@ -5,16 +5,13 @@ use aya_ebpf::{
         generated::{bpf_get_current_task_btf, bpf_ktime_get_ns},
     },
     macros::map,
-    maps::{RingBuf, StackTrace},
+    maps::StackTrace,
     programs::TracePointContext,
 };
 use aya_log_ebpf::{info, warn};
-use crash_tracer_common::SignalDeliverEvent;
+use crash_tracer_common::{CrashTracerEvent, EventType, SignalDeliverEvent};
 
-use crate::vmlinux::task_struct;
-
-#[map]
-static SIGNAL_DELIVER_EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
+use crate::{programs::CRASH_TRACER_EVENTS, vmlinux::task_struct};
 
 #[map]
 static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0);
@@ -32,7 +29,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
     // si_code is at offset 16 (check with: sudo cat /sys/kernel/debug/tracing/events/signal/signal_deliver/format)
     let si_code: i32 = unsafe { ctx.read_at(16)? };
 
-    let mut entry = match SIGNAL_DELIVER_EVENTS.reserve::<SignalDeliverEvent>(0) {
+    let mut entry = match CRASH_TRACER_EVENTS.reserve::<CrashTracerEvent>(0) {
         Some(e) => e,
         None => {
             warn!(&ctx, "The buffer is currently full. Cannot capture crash.");
@@ -40,35 +37,33 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         }
     };
 
-    let event = entry.as_mut_ptr();
+    let ptr = entry.as_mut_ptr();
     let task: *const task_struct = unsafe { bpf_get_current_task_btf() as *const task_struct };
 
     unsafe {
+        (*ptr).tag = EventType::SignalDeliver;
+
+        let event = &mut (*ptr).payload.signal;
         let pid_tgid = bpf_get_current_pid_tgid();
-        (*event).pid = pid_tgid as u32;
-        (*event).tid = (pid_tgid >> 32) as u32;
-        (*event).signal = signal;
-        (*event).si_code = si_code;
-        (*event).timestamp_ns = bpf_ktime_get_ns();
-        (*event).boottime = (*task).start_boottime;
+        event.pid = pid_tgid as u32;
+        event.tid = (pid_tgid >> 32) as u32;
+        event.signal = signal;
+        event.si_code = si_code;
+        event.timestamp_ns = bpf_ktime_get_ns();
+        event.boottime = (*task).start_boottime;
 
         // Process name - if this fails, just use empty name rather than failing
-        (*event).cmd = bpf_get_current_comm().unwrap_or([0u8; 16]);
+        event.cmd = bpf_get_current_comm().unwrap_or([0u8; 16]);
 
-        (*event).kernel_stack_id = SIGNAL_DELIVER_STACKS
+        event.kernel_stack_id = SIGNAL_DELIVER_STACKS
             .get_stackid::<TracePointContext>(&ctx, 0)
             .unwrap_or(-1);
-        (*event).user_stack_id = SIGNAL_DELIVER_STACKS
+        event.user_stack_id = SIGNAL_DELIVER_STACKS
             .get_stackid::<TracePointContext>(&ctx, BPF_F_USER_STACK.into())
             .unwrap_or(-1);
-    }
 
-    info!(
-        &ctx,
-        "crash detected: pid={} sig={}",
-        unsafe { (*event).pid },
-        signal
-    );
+        info!(&ctx, "crash detected: pid={} sig={}", event.pid, signal);
+    }
 
     entry.submit(0);
 

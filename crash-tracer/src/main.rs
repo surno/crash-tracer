@@ -1,14 +1,10 @@
 mod event;
 mod state;
-use crate::event::Event::SchedExec;
-use crate::event::Event::SignalDeliver;
-use crate::event::sched_exec_source::SchedExecEventSource;
-use crate::event::{EventSource, signal_deliver_source::SignalDeliverEventSource};
+use crate::event::unified_source::UnifiedEventSource;
+use crate::event::{Event, EventSource};
 use crate::state::map::MemoryMap;
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 use anyhow::Context;
 use aya::{
@@ -105,36 +101,34 @@ async fn main() -> Result<(), anyhow::Error> {
 
     std::fs::create_dir_all(&args.output_dir)?;
 
-    // Get handles to maps
-    let signal_deliver_events = RingBuf::try_from(bpf.take_map("SIGNAL_DELIVER_EVENTS").unwrap())?;
+    // Get handles to maps - now using unified ring buffer
+    let events = RingBuf::try_from(bpf.take_map("CRASH_TRACER_EVENTS").unwrap())?;
     let signal_deliver_stacks =
         StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
-    let sched_exec_events = RingBuf::try_from(bpf.take_map("SCHED_EXEC_EVENTS").unwrap())?;
 
-    // Process events in main loop instead of spawning
-    // This keeps bpf alive for the entire program lifetime
     let output_dir = args.output_dir.clone();
+    let mut memory_map = MemoryMap::new();
 
-    let memory_map = Arc::new(Mutex::new(MemoryMap::new()));
+    // Single event loop processes events in FIFO order
+    // This guarantees exec events are processed before signal events for the same process
+    let mut event_source = UnifiedEventSource::new(events);
 
     tokio::select! {
         _ = signal::ctrl_c() => {
             info!("Exiting...");
         }
         _ = async {
-            let mut signal_deliver_source = SignalDeliverEventSource::new(signal_deliver_events);
-            while let Some(SignalDeliver(event)) = signal_deliver_source.next_event().await {
-                info!("signal event: pid={}, boottime={}", event.pid, event.boottime);
-                let map = memory_map.lock().unwrap();
-                handle_signal_deliver_event(&event, &signal_deliver_stacks, &map, &output_dir).await;
-            }
-        } => {}
-        _ = async {
-            let mut sched_exec_source = SchedExecEventSource::new(sched_exec_events);
-            while let Some(SchedExec(event)) = sched_exec_source.next_event().await {
-                info!("exec event: pid={}, boottime={}", event.pid, event.boottime);
-                let mut map = memory_map.lock().unwrap();
-                map.insert(event.pid, event.boottime);
+            while let Some(event) = event_source.next_event().await {
+                match event {
+                    Event::SchedExec(exec) => {
+                        info!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
+                        memory_map.insert(exec.pid, exec.boottime);
+                    }
+                    Event::SignalDeliver(signal) => {
+                        info!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
+                        handle_signal_deliver_event(&signal, &signal_deliver_stacks, &memory_map, &output_dir).await;
+                    }
+                }
             }
         } => {}
     }
