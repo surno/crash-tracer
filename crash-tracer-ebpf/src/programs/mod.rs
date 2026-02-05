@@ -1,6 +1,7 @@
 use aya_ebpf::{macros::map, maps::RingBuf};
 
 pub mod sched_process_exec;
+pub mod sched_process_exit;
 pub mod signal_deliver;
 
 #[map]

@@ -34,6 +34,10 @@ impl MemoryMap {
         return self.memory_map.get(&MapKey { pid, boottime });
     }
 
+    pub fn remove(&mut self, pid: u32, boottime: u64) {
+        self.memory_map.remove(&MapKey { pid, boottime });
+    }
+
     fn read_map(&mut self, pid: u32) -> Result<Vec<String>, anyhow::Error> {
         let file = OpenOptions::new()
             .read(true)

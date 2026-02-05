@@ -13,6 +13,7 @@ pub const SIGSEGV: i32 = 11;
 pub enum EventType {
     SchedExec = 0,
     SignalDeliver = 1,
+    SchedExit = 2,
 }
 
 // Unified event for the ring buffer
@@ -28,6 +29,7 @@ pub struct CrashTracerEvent {
 #[derive(Clone, Copy)]
 pub union EventPayload {
     pub exec: SchedExecEvent,
+    pub exit: SchedExitEvent,
     pub signal: SignalDeliverEvent,
 }
 
@@ -45,11 +47,25 @@ impl CrashTracerEvent {
             _ => None,
         }
     }
+
+    pub fn as_exit(&self) -> Option<&SchedExitEvent> {
+        match self.tag {
+            EventType::SchedExit => Some(unsafe { &self.payload.exit }),
+            _ => None,
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SchedExecEvent {
+    pub pid: u32,
+    pub boottime: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SchedExitEvent {
     pub pid: u32,
     pub boottime: u64,
 }

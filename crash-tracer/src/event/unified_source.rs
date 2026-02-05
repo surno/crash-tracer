@@ -43,6 +43,11 @@ impl EventSource for UnifiedEventSource {
                             return Some(Event::SignalDeliver(*signal));
                         }
                     }
+                    EventType::SchedExit => {
+                        if let Some(exit) = event.as_exit() {
+                            return Some(Event::SchedExit(*exit));
+                        }
+                    }
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

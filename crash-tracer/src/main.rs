@@ -14,7 +14,7 @@ use aya::{
 use aya_log::EbpfLogger;
 use clap::Parser;
 use crash_tracer_common::SignalDeliverEvent;
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::signal;
 
 #[derive(Debug, Parser)]
@@ -97,6 +97,15 @@ async fn main() -> Result<(), anyhow::Error> {
         .attach("sched", "sched_process_exec")
         .context("failed to attach sched_process_exec tracepoint.")?;
 
+    let exit_program: &mut TracePoint = bpf
+        .program_mut("handle_sched_process_exit")
+        .unwrap()
+        .try_into()?;
+    exit_program.load()?;
+    exit_program
+        .attach("sched", "sched_process_exit")
+        .context("failed to attach sched_process_exit tracepoint.")?;
+
     info!("Programs attached. Waiting for events...");
 
     std::fs::create_dir_all(&args.output_dir)?;
@@ -121,12 +130,16 @@ async fn main() -> Result<(), anyhow::Error> {
             while let Some(event) = event_source.next_event().await {
                 match event {
                     Event::SchedExec(exec) => {
-                        info!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
+                        debug!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
                         memory_map.insert(exec.pid, exec.boottime);
                     }
                     Event::SignalDeliver(signal) => {
-                        info!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
+                        debug!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
                         handle_signal_deliver_event(&signal, &signal_deliver_stacks, &memory_map, &output_dir).await;
+                    }
+                    Event::SchedExit(exit) => {
+                        debug!("exit event: pid={}, boottime={}", exit.pid, exit.boottime);
+                        memory_map.remove(exit.pid, exit.boottime);
                     }
                 }
             }
