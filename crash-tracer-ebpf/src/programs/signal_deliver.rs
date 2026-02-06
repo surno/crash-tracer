@@ -112,6 +112,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
                 let key = StackDumpKey {
                     pid: event.pid,
                     tid: event.tid,
+                    boottime: event.boottime,
                 };
                 let _ = STACK_DUMP_MAP.insert(&key, scratch, 0);
             }

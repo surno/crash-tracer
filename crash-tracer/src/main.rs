@@ -145,6 +145,7 @@ async fn handle_signal_deliver_event(
     let dump_key = StackDumpKey {
         pid: event.pid,
         tid: event.tid,
+        boottime: event.boottime,
     };
     let stack_dump = stack_dumps.get(&dump_key, 0).ok();
     let _ = stack_dumps.remove(&dump_key);

@@ -157,6 +157,7 @@ impl SignalDeliverEvent {
 pub struct StackDumpKey {
     pub pid: u32,
     pub tid: u32,
+    pub boottime: u64,
 }
 
 #[repr(C)]
