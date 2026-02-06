@@ -1,8 +1,8 @@
 use aya_ebpf::{
-    bindings::BPF_F_USER_STACK,
+    bindings::{BPF_F_USER_STACK, pt_regs},
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid,
-        generated::{bpf_get_current_task_btf, bpf_ktime_get_ns},
+        generated::{bpf_get_current_task_btf, bpf_ktime_get_ns, bpf_task_pt_regs},
     },
     macros::map,
     maps::StackTrace,
@@ -51,6 +51,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         event.si_code = si_code;
         event.timestamp_ns = bpf_ktime_get_ns();
         event.boottime = (*task).start_boottime;
+        event.fault_addr = (*task).thread.cr2;
 
         // Process name - if this fails, just use empty name rather than failing
         event.cmd = bpf_get_current_comm().unwrap_or([0u8; 16]);
@@ -61,6 +62,24 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         event.user_stack_id = SIGNAL_DELIVER_STACKS
             .get_stackid::<TracePointContext>(&ctx, BPF_F_USER_STACK.into())
             .unwrap_or(-1);
+
+        let regs = bpf_task_pt_regs(task as *mut _) as *const pt_regs;
+        event.rip = (*regs).rip;
+        event.rsp = (*regs).rsp;
+        event.rbp = (*regs).rbp;
+        event.rflags = (*regs).eflags;
+        event.rax = (*regs).rax;
+        event.rsi = (*regs).rsi;
+        event.rdi = (*regs).rdi;
+        event.rdx = (*regs).rdx;
+        event.r8 = (*regs).r8;
+        event.r9 = (*regs).r9;
+        event.r10 = (*regs).r10;
+        event.r11 = (*regs).r11;
+        event.r12 = (*regs).r12;
+        event.r13 = (*regs).r13;
+        event.r14 = (*regs).r14;
+        event.r15 = (*regs).r15;
 
         info!(&ctx, "crash detected: pid={} sig={}", event.pid, signal);
     }
