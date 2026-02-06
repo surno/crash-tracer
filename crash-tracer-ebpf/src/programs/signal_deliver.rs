@@ -1,20 +1,29 @@
 use aya_ebpf::{
     bindings::{BPF_F_USER_STACK, pt_regs},
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid,
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_probe_read_user_buf,
         generated::{bpf_get_current_task_btf, bpf_ktime_get_ns, bpf_task_pt_regs},
     },
     macros::map,
-    maps::StackTrace,
+    maps::{HashMap, PerCpuArray, StackTrace},
     programs::TracePointContext,
 };
 use aya_log_ebpf::{info, warn};
-use crash_tracer_common::{CrashTracerEvent, EventType, SignalDeliverEvent};
+use crash_tracer_common::{CrashTracerEvent, EventType, SignalDeliverEvent, StackDump, StackDumpKey};
 
 use crate::{programs::CRASH_TRACER_EVENTS, vmlinux::task_struct};
 
 #[map]
 static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0);
+
+/// Scratch space for reading user stack memory.
+/// PerCpuArray gives each CPU its own 16KB buffer — no contention.
+#[map]
+static STACK_DUMP_SCRATCH: PerCpuArray<StackDump> = PerCpuArray::with_max_entries(1, 0);
+
+/// Stack dumps keyed by (pid, tid). Userspace reads and deletes after processing.
+#[map]
+static STACK_DUMP_MAP: HashMap<StackDumpKey, StackDump> = HashMap::with_max_entries(64, 0);
 
 pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i64> {
     // For signal:signal_deliver tracepoint, the signal number is at offset 8
@@ -80,6 +89,33 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         event.r13 = (*regs).r13;
         event.r14 = (*regs).r14;
         event.r15 = (*regs).r15;
+
+        // Capture raw user stack memory.
+        // bpf_probe_read_user is all-or-nothing: if the read extends past
+        // mapped memory it fails entirely. Cascade through decreasing sizes
+        // so we still capture what we can when RSP is near the stack top.
+        if event.rsp != 0 {
+            if let Some(scratch) = STACK_DUMP_SCRATCH.get_ptr_mut(0) {
+                let scratch = &mut *scratch;
+                scratch.rsp = event.rsp;
+                scratch.len = 0;
+                let src = event.rsp as *const u8;
+                if bpf_probe_read_user_buf(src, &mut scratch.data[..16384]).is_ok() {
+                    scratch.len = 16384;
+                } else if bpf_probe_read_user_buf(src, &mut scratch.data[..8192]).is_ok() {
+                    scratch.len = 8192;
+                } else if bpf_probe_read_user_buf(src, &mut scratch.data[..4096]).is_ok() {
+                    scratch.len = 4096;
+                } else if bpf_probe_read_user_buf(src, &mut scratch.data[..2048]).is_ok() {
+                    scratch.len = 2048;
+                }
+                let key = StackDumpKey {
+                    pid: event.pid,
+                    tid: event.tid,
+                };
+                let _ = STACK_DUMP_MAP.insert(&key, scratch, 0);
+            }
+        }
 
         info!(&ctx, "crash detected: pid={} sig={}", event.pid, signal);
     }

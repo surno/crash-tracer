@@ -8,10 +8,10 @@ use crate::state::map::MemoryMap;
 
 use std::path::PathBuf;
 
-use aya::maps::{RingBuf, StackTraceMap};
+use aya::maps::{HashMap, RingBuf, StackTraceMap};
 use aya_log::EbpfLogger;
 use clap::Parser;
-use crash_tracer_common::SignalDeliverEvent;
+use crash_tracer_common::{SignalDeliverEvent, StackDump, StackDumpKey};
 use log::{debug, info, warn};
 use tokio::signal;
 
@@ -86,6 +86,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let events = RingBuf::try_from(bpf.take_map("CRASH_TRACER_EVENTS").unwrap())?;
     let signal_deliver_stacks =
         StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
+    let mut stack_dumps: HashMap<_, StackDumpKey, StackDump> =
+        HashMap::try_from(bpf.take_map("STACK_DUMP_MAP").unwrap())?;
 
     let output_dir = args.output_dir.clone();
     let mut memory_map = MemoryMap::new();
@@ -107,7 +109,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                     Event::SignalDeliver(signal) => {
                         debug!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
-                        handle_signal_deliver_event(&signal, &signal_deliver_stacks, &memory_map, &output_dir).await;
+                        handle_signal_deliver_event(&signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map, &output_dir).await;
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={}", exit.pid, exit.boottime);
@@ -127,6 +129,7 @@ async fn main() -> Result<(), anyhow::Error> {
 async fn handle_signal_deliver_event(
     event: &SignalDeliverEvent,
     stacks: &StackTraceMap<aya::maps::MapData>,
+    stack_dumps: &mut HashMap<aya::maps::MapData, StackDumpKey, StackDump>,
     map: &MemoryMap,
     output_dir: &std::path::Path,
 ) {
@@ -138,9 +141,17 @@ async fn handle_signal_deliver_event(
         .then(|| stacks.get(&(event.user_stack_id as u32), 0).ok())
         .flatten();
 
+    // Retrieve raw stack dump from eBPF HashMap
+    let dump_key = StackDumpKey {
+        pid: event.pid,
+        tid: event.tid,
+    };
+    let stack_dump = stack_dumps.get(&dump_key, 0).ok();
+    let _ = stack_dumps.remove(&dump_key);
+
     report::print_to_console(event, stack_trace.as_ref());
 
-    match report::save_to_file(output_dir, event, stack_trace.as_ref(), map) {
+    match report::save_to_file(output_dir, event, stack_trace.as_ref(), stack_dump.as_ref(), map) {
         Ok(path) => println!("\nReport saved: {}", path.display()),
         Err(e) => log::error!("Failed to save report: {}", e),
     }

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use aya::maps::stack_trace::StackTrace;
-use crash_tracer_common::SignalDeliverEvent;
+use crash_tracer_common::{SignalDeliverEvent, StackDump};
 
 use crate::state::map::MemoryMap;
 
@@ -11,6 +11,7 @@ fn write_report(
     w: &mut impl Write,
     event: &SignalDeliverEvent,
     stack_trace: Option<&StackTrace>,
+    stack_dump: Option<&StackDump>,
     map: Option<&Vec<String>>,
 ) -> anyhow::Result<()> {
     let cmd = std::str::from_utf8(&event.cmd)
@@ -68,6 +69,45 @@ fn write_report(
         }
     }
 
+    if let Some(dump) = stack_dump {
+        let len = dump.len as usize;
+        writeln!(w)?;
+        writeln!(w, "Raw Stack ({} bytes from 0x{:016x})", len, dump.rsp)?;
+        writeln!(w, "---------")?;
+        for offset in (0..len).step_by(16) {
+            let addr = dump.rsp + offset as u64;
+            let end = (offset + 16).min(len);
+            let chunk = &dump.data[offset..end];
+
+            write!(w, "  0x{:016x}:", addr)?;
+            for (i, byte) in chunk.iter().enumerate() {
+                if i % 2 == 0 {
+                    write!(w, " ")?;
+                }
+                write!(w, "{:02x}", byte)?;
+            }
+            // Pad remaining space if chunk < 16 bytes
+            let missing = 16 - chunk.len();
+            for i in 0..missing {
+                if (chunk.len() + i) % 2 == 0 {
+                    write!(w, " ")?;
+                }
+                write!(w, "  ")?;
+            }
+
+            write!(w, "  |")?;
+            for byte in chunk {
+                let ch = if byte.is_ascii_graphic() || *byte == b' ' {
+                    *byte as char
+                } else {
+                    '.'
+                };
+                write!(w, "{}", ch)?;
+            }
+            writeln!(w, "|")?;
+        }
+    }
+
     if let Some(maps) = map {
         writeln!(w)?;
         writeln!(w, "Memory Maps")?;
@@ -86,6 +126,7 @@ pub fn save_to_file(
     output_dir: &Path,
     event: &SignalDeliverEvent,
     stack_trace: Option<&StackTrace>,
+    stack_dump: Option<&StackDump>,
     map: &MemoryMap,
 ) -> anyhow::Result<PathBuf> {
     let cmd = std::str::from_utf8(&event.cmd)
@@ -102,7 +143,7 @@ pub fn save_to_file(
     }
 
     let mut file = std::fs::File::create(&filepath)?;
-    write_report(&mut file, event, stack_trace, maps)?;
+    write_report(&mut file, event, stack_trace, stack_dump, maps)?;
 
     Ok(filepath)
 }
@@ -113,8 +154,8 @@ pub fn print_to_console(
     stack_trace: Option<&StackTrace>,
 ) {
     let mut stdout = std::io::stdout().lock();
-    // Console output omits memory maps (they can be very long)
-    if let Err(e) = write_report(&mut stdout, event, stack_trace, None) {
+    // Console output omits memory maps and raw stack (they can be very long)
+    if let Err(e) = write_report(&mut stdout, event, stack_trace, None, None) {
         log::error!("Failed to write to stdout: {}", e);
     }
 }

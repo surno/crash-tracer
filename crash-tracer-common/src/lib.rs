@@ -1,5 +1,7 @@
 #![no_std]
 
+pub const STACK_DUMP_SIZE: usize = 16384; // 16KB
+
 // Let's consider these as crashes
 pub const SIGILL: i32 = 4;
 pub const SIGABRT: i32 = 6;
@@ -150,8 +152,30 @@ impl SignalDeliverEvent {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct StackDumpKey {
+    pub pid: u32,
+    pub tid: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct StackDump {
+    pub rsp: u64,
+    pub len: u32,
+    pub _pad: u32,
+    pub data: [u8; STACK_DUMP_SIZE],
+}
+
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for SignalDeliverEvent {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for CrashTracerEvent {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for StackDumpKey {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for StackDump {}
