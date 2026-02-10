@@ -8,10 +8,10 @@ use aya_ebpf::{
     maps::{HashMap, PerCpuArray, StackTrace},
     programs::TracePointContext,
 };
-use aya_log_ebpf::{info, warn};
-use crash_tracer_common::{CrashTracerEvent, EventType, SignalDeliverEvent, StackDump, StackDumpKey};
+use aya_log_ebpf::info;
+use crash_tracer_common::{SignalDeliverEvent, StackDump, StackDumpKey};
 
-use crate::{programs::CRASH_TRACER_EVENTS, vmlinux::task_struct};
+use crate::{programs::PENDING_SIGNALS, vmlinux::task_struct};
 
 #[map]
 static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0);
@@ -38,21 +38,10 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
     // si_code is at offset 16 (check with: sudo cat /sys/kernel/debug/tracing/events/signal/signal_deliver/format)
     let si_code: i32 = unsafe { ctx.read_at(16)? };
 
-    let mut entry = match CRASH_TRACER_EVENTS.reserve::<CrashTracerEvent>(0) {
-        Some(e) => e,
-        None => {
-            warn!(&ctx, "The buffer is currently full. Cannot capture crash.");
-            return Ok(());
-        }
-    };
-
-    let ptr = entry.as_mut_ptr();
     let task: *const task_struct = unsafe { bpf_get_current_task_btf() as *const task_struct };
 
+    let mut event = SignalDeliverEvent::zeroed();
     unsafe {
-        (*ptr).tag = EventType::SignalDeliver;
-
-        let event = &mut (*ptr).payload.signal;
         let pid_tgid = bpf_get_current_pid_tgid();
         event.pid = pid_tgid as u32;
         event.tid = (pid_tgid >> 32) as u32;
@@ -121,7 +110,13 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         info!(&ctx, "crash detected: pid={} sig={}", event.pid, signal);
     }
 
-    entry.submit(0);
+    let key = StackDumpKey {
+        pid: event.pid,
+        tid: event.tid,
+        boottime: event.boottime,
+    };
+
+    let _ = PENDING_SIGNALS.insert(&key, event, 0);
 
     Ok(())
 }
