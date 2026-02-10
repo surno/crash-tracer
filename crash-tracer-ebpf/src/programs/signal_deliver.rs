@@ -5,13 +5,16 @@ use aya_ebpf::{
         generated::{bpf_get_current_task_btf, bpf_ktime_get_ns, bpf_task_pt_regs},
     },
     macros::map,
-    maps::{HashMap, PerCpuArray, StackTrace},
+    maps::{PerCpuArray, StackTrace},
     programs::TracePointContext,
 };
 use aya_log_ebpf::info;
 use crash_tracer_common::{SignalDeliverEvent, StackDump, StackDumpKey};
 
-use crate::{programs::PENDING_SIGNALS, vmlinux::task_struct};
+use crate::{
+    programs::{PENDING_SIGNALS, STACK_DUMP_MAP},
+    vmlinux::task_struct,
+};
 
 #[map]
 static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0);
@@ -20,10 +23,6 @@ static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0)
 /// PerCpuArray gives each CPU its own 16KB buffer — no contention.
 #[map]
 static STACK_DUMP_SCRATCH: PerCpuArray<StackDump> = PerCpuArray::with_max_entries(1, 0);
-
-/// Stack dumps keyed by (pid, tid). Userspace reads and deletes after processing.
-#[map]
-static STACK_DUMP_MAP: HashMap<StackDumpKey, StackDump> = HashMap::with_max_entries(64, 0);
 
 pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i64> {
     // For signal:signal_deliver tracepoint, the signal number is at offset 8

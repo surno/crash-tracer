@@ -31,7 +31,7 @@ impl MemoryMap {
     }
 
     pub fn get(&self, pid: u32, boottime: u64) -> Option<&Vec<String>> {
-        return self.memory_map.get(&MapKey { pid, boottime });
+        self.memory_map.get(&MapKey { pid, boottime })
     }
 
     pub fn remove(&mut self, pid: u32, boottime: u64) {

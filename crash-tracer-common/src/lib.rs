@@ -36,14 +36,6 @@ pub union EventPayload {
 }
 
 impl CrashTracerEvent {
-    pub fn new(tag: EventType, payload: EventPayload) -> Self {
-        Self {
-            tag: tag,
-            _pad: 0,
-            payload: payload,
-        }
-    }
-
     pub fn as_exec(&self) -> Option<&SchedExecEvent> {
         match self.tag {
             EventType::SchedExec => Some(unsafe { &self.payload.exec }),
@@ -77,6 +69,7 @@ pub struct SchedExecEvent {
 #[derive(Clone, Copy)]
 pub struct SchedExitEvent {
     pub pid: u32,
+    pub exit_code: u32,
     pub boottime: u64,
 }
 

@@ -112,7 +112,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         handle_signal_deliver_event(&signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map, &output_dir).await;
                     }
                     Event::SchedExit(exit) => {
-                        debug!("exit event: pid={}, boottime={}", exit.pid, exit.boottime);
+                        debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
                         memory_map.remove(exit.pid, exit.boottime);
                     }
                 }
@@ -152,7 +152,13 @@ async fn handle_signal_deliver_event(
 
     report::print_to_console(event, stack_trace.as_ref());
 
-    match report::save_to_file(output_dir, event, stack_trace.as_ref(), stack_dump.as_ref(), map) {
+    match report::save_to_file(
+        output_dir,
+        event,
+        stack_trace.as_ref(),
+        stack_dump.as_ref(),
+        map,
+    ) {
         Ok(path) => println!("\nReport saved: {}", path.display()),
         Err(e) => log::error!("Failed to save report: {}", e),
     }
