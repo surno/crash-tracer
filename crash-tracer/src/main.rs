@@ -115,6 +115,9 @@ async fn main() -> Result<(), anyhow::Error> {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
                         memory_map.remove(exit.pid, exit.boottime);
                     }
+                    Event::ArtifactReady(artifact) => {
+                        debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, String::from_utf8(artifact.filename.to_vec()).unwrap());
+                    }
                 }
             }
         } => {}

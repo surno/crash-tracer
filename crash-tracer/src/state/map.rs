@@ -22,6 +22,8 @@ pub enum RuntimeKind {
 pub struct ProcessInfo {
     pub maps: Vec<String>,
     pub runtime: RuntimeKind,
+    pub cwd: Option<String>,
+    pub cmdline: Option<String>,
 }
 
 #[repr(C)]
@@ -44,8 +46,31 @@ impl MemoryMap {
     pub fn insert(&mut self, pid: u32, boottime: u64) {
         if let Ok(maps) = self.read_map(pid) {
             let runtime = self.detect_runtime(&maps);
-            self.memory_map
-                .insert(MapKey { pid, boottime }, ProcessInfo { maps, runtime });
+
+            let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid))
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+
+            let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid))
+                .ok()
+                .map(|bytes| {
+                    bytes
+                        .split(|&b| b == 0)
+                        .filter(|s| s.is_empty())
+                        .map(|s| String::from_utf8_lossy(s).into_owned())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+
+            self.memory_map.insert(
+                MapKey { pid, boottime },
+                ProcessInfo {
+                    maps,
+                    runtime,
+                    cwd,
+                    cmdline,
+                },
+            );
         }
     }
 
@@ -99,6 +124,20 @@ impl MemoryMap {
             }
         }
         RuntimeKind::Native
+    }
+}
+
+impl RuntimeKind {
+    pub fn to_id(&self) -> u32 {
+        match self {
+            RuntimeKind::Native => 0,
+            RuntimeKind::Jvm => 1,
+            RuntimeKind::V8 => 2,
+            RuntimeKind::Il2Cpp => 3,
+            RuntimeKind::Mono => 4,
+            RuntimeKind::CoreClr => 5,
+            RuntimeKind::Python => 6,
+        }
     }
 }
 

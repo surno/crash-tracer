@@ -9,6 +9,44 @@ pub const SIGBUS: i32 = 7;
 pub const SIGFPE: i32 = 8;
 pub const SIGSEGV: i32 = 11;
 
+pub const ARTIFACT_FILENAME_MAX: usize = 128;
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeKindId {
+    Native = 0,
+    Jvm = 1,
+    V8 = 2,
+    Il2Cpp = 3,
+    Mono = 4,
+    CoreClr = 5,
+    Python = 6,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FdTrackKey {
+    pub pid: u32,
+    pub fd: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ArtifactInfo {
+    pub filename: [u8; ARTIFACT_FILENAME_MAX],
+    pub filename_len: u32,
+    pub _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ArtifactReadyEvent {
+    pub pid: u32,
+    pub filename_len: u32,
+    pub boottime: u64,
+    pub filename: [u8; ARTIFACT_FILENAME_MAX],
+}
+
 // Event type discriminant
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +54,7 @@ pub enum EventType {
     SchedExec = 0,
     SignalDeliver = 1,
     SchedExit = 2,
+    ArtifactReady = 3,
 }
 
 // Unified event for the ring buffer
@@ -33,6 +72,7 @@ pub union EventPayload {
     pub exec: SchedExecEvent,
     pub exit: SchedExitEvent,
     pub signal: SignalDeliverEvent,
+    pub artifact: ArtifactReadyEvent,
 }
 
 impl CrashTracerEvent {
@@ -53,6 +93,13 @@ impl CrashTracerEvent {
     pub fn as_exit(&self) -> Option<&SchedExitEvent> {
         match self.tag {
             EventType::SchedExit => Some(unsafe { &self.payload.exit }),
+            _ => None,
+        }
+    }
+
+    pub fn as_artifact(&self) -> Option<&ArtifactReadyEvent> {
+        match self.tag {
+            EventType::ArtifactReady => Some(unsafe { &self.payload.artifact }),
             _ => None,
         }
     }
@@ -181,3 +228,10 @@ unsafe impl aya::Pod for StackDumpKey {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for StackDump {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for ArtifactReadyEvent {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for FdTrackKey {}
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for ArtifactInfo {}

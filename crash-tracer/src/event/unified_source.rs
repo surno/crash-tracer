@@ -48,6 +48,11 @@ impl EventSource for UnifiedEventSource {
                             return Some(Event::SchedExit(*exit));
                         }
                     }
+                    EventType::ArtifactReady => {
+                        if let Some(artifact) = event.as_artifact() {
+                            return Some(Event::ArtifactReady(*artifact));
+                        }
+                    }
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
