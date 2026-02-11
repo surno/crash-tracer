@@ -191,9 +191,9 @@ impl CrashDb {
 
     pub async fn complete_crash(
         &self,
-        pid: u64,
+        pid: u32,
         boottime: u64,
-        exit_code: u64,
+        exit_code: u32,
     ) -> anyhow::Result<Option<i64>> {
         let Some(proc_row) = sqlx::query("SELECT id FROM processes WHERE pid=$1 AND boottime=$2")
             .bind(pid as i64)

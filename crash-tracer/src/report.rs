@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use aya::maps::stack_trace::StackTrace;
 use crash_tracer_common::{SignalDeliverEvent, StackDump};
 
+use crate::db;
 use crate::state::map::ProcessInfo;
 
 /// Core formatting — writes a crash report to any `Write` target.
@@ -220,4 +221,140 @@ pub fn si_code_name(sig: i32, code: i32) -> &'static str {
         (4, 1) => "ILL_ILLOPC",
         _ => "UNKNOWN",
     }
+}
+
+pub fn save_from_db(output_dir: &Path, data: &db::CrashReportData) -> anyhow::Result<PathBuf> {
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("crash_{}_{}_{}.txt", data.cmd, data.pid, timestamp);
+    let filepath = output_dir.join(&filename);
+
+    let mut file = std::fs::File::create(&filepath)?;
+    write_report_from_db(&mut file, data)?;
+
+    Ok(filepath)
+}
+
+fn write_report_from_db(w: &mut impl Write, data: &db::CrashReportData) -> anyhow::Result<()> {
+    writeln!(w, "Crash Report")?;
+    writeln!(w, "============")?;
+    writeln!(w, "Generated: {}", chrono::Utc::now().to_rfc3339())?;
+    writeln!(w)?;
+    writeln!(w, "Process: {} (PID: {}, TID: {})", data.cmd, data.pid, data.tid)?;
+    writeln!(w, "Signal:  {} ({})", signal_name(data.signal), data.signal)?;
+    writeln!(w, "Code:    {} ({})", si_code_name(data.signal, data.si_code), data.si_code)?;
+
+    if data.fault_addr != 0 {
+        writeln!(w, "Fault:   0x{:016x}", data.fault_addr)?;
+    }
+
+    if let Some(exit_code) = data.exit_code {
+        writeln!(w, "Exit:    {}", exit_code)?;
+    }
+
+    writeln!(w)?;
+    writeln!(w, "Detected Runtime: {}", data.runtime)?;
+
+    let r = &data.registers;
+    writeln!(w)?;
+    writeln!(w, "Registers")?;
+    writeln!(w, "---------")?;
+    writeln!(w, "  RIP: 0x{:016x}  RFLAGS: 0x{:016x}", r.rip, r.rflags)?;
+    writeln!(w, "  RSP: 0x{:016x}  RBP:    0x{:016x}", r.rsp, r.rbp)?;
+    writeln!(w, "  RAX: 0x{:016x}  RBX:    0x{:016x}", r.rax, r.rbx)?;
+    writeln!(w, "  RCX: 0x{:016x}  RDX:    0x{:016x}", r.rcx, r.rdx)?;
+    writeln!(w, "  RSI: 0x{:016x}  RDI:    0x{:016x}", r.rsi, r.rdi)?;
+    writeln!(w, "  R8:  0x{:016x}  R9:     0x{:016x}", r.r8, r.r9)?;
+    writeln!(w, "  R10: 0x{:016x}  R11:    0x{:016x}", r.r10, r.r11)?;
+    writeln!(w, "  R12: 0x{:016x}  R13:    0x{:016x}", r.r12, r.r13)?;
+    writeln!(w, "  R14: 0x{:016x}  R15:    0x{:016x}", r.r14, r.r15)?;
+
+    if !data.stack_frames.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "User Stack:")?;
+        writeln!(w, "---------")?;
+        for (i, ip) in data.stack_frames.iter().enumerate() {
+            if *ip == 0 {
+                break;
+            }
+            writeln!(w, "  #{:2}: 0x{:016x}", i, ip)?;
+        }
+    }
+
+    if let Some((rsp, ref dump)) = data.stack_dump {
+        let len = dump.len();
+        writeln!(w)?;
+        writeln!(w, "Raw Stack ({} bytes from 0x{:016x})", len, rsp)?;
+        writeln!(w, "---------")?;
+        for offset in (0..len).step_by(16) {
+            let addr = rsp + offset as u64;
+            let end = (offset + 16).min(len);
+            let chunk = &dump[offset..end];
+
+            write!(w, "  0x{:016x}:", addr)?;
+            for (i, byte) in chunk.iter().enumerate() {
+                if i % 2 == 0 {
+                    write!(w, " ")?;
+                }
+                write!(w, "{:02x}", byte)?;
+            }
+            let missing = 16 - chunk.len();
+            for i in 0..missing {
+                if (chunk.len() + i) % 2 == 0 {
+                    write!(w, " ")?;
+                }
+                write!(w, "  ")?;
+            }
+
+            write!(w, "  |")?;
+            for byte in chunk {
+                let ch = if byte.is_ascii_graphic() || *byte == b' ' {
+                    *byte as char
+                } else {
+                    '.'
+                };
+                write!(w, "{}", ch)?;
+            }
+            writeln!(w, "|")?;
+        }
+    }
+
+    if !data.memory_maps.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "Memory Maps")?;
+        writeln!(w, "-----------")?;
+        for line in &data.memory_maps {
+            writeln!(w, "{}", line)?;
+        }
+    }
+
+    if !data.artifacts.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "Runtime Artifacts")?;
+        writeln!(w, "-----------------")?;
+        for artifact in &data.artifacts {
+            writeln!(w, "  File: {} ({})", artifact.filename, artifact.full_path)?;
+            match &artifact.content {
+                Some(content) => {
+                    if let Ok(text) = std::str::from_utf8(content) {
+                        writeln!(w)?;
+                        let truncated = text.len() > 4096;
+                        let preview = if truncated { &text[..4096] } else { text };
+                        for line in preview.lines() {
+                            writeln!(w, "    {}", line)?;
+                        }
+                        if truncated {
+                            writeln!(w, "    ... ({} bytes total, truncated)", text.len())?;
+                        }
+                    } else {
+                        writeln!(w, "  (binary content, {} bytes)", content.len())?;
+                    }
+                }
+                None => {
+                    writeln!(w, "  (content not available)")?;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

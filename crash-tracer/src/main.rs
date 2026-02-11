@@ -3,6 +3,7 @@ mod ebpf;
 mod event;
 mod report;
 mod state;
+use crate::db::CrashDb;
 use crate::event::unified_source::UnifiedEventSource;
 use crate::event::{Event, EventSource};
 use crate::state::map::MemoryMap;
@@ -82,6 +83,8 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Programs attached. Waiting for events...");
 
     std::fs::create_dir_all(&args.output_dir)?;
+    let db_path = args.output_dir.join("crash-tracer.db");
+    let db = db::CrashDb::new(&db_path).await?;
 
     // Get handles to maps - now using unified ring buffer
     let events = RingBuf::try_from(bpf.take_map("CRASH_TRACER_EVENTS").unwrap())?;
@@ -107,15 +110,30 @@ async fn main() -> Result<(), anyhow::Error> {
                     Event::SchedExec(exec) => {
                         debug!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
                         memory_map.insert(exec.pid, exec.boottime);
+                        if let Some(info) = memory_map.get(exec.pid, exec.boottime) {
+                            if let Err(e) = db.insert_process(info).await {
+                                log::error!("DB insert_process failed: {e}");
+                            }
+                        }
                     }
                     Event::SignalDeliver(signal) => {
                         debug!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
-                        handle_signal_deliver_event(&signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map, &output_dir).await;
+                        handle_signal_deliver_event(&db, &signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map, &output_dir).await;
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
-                        memory_map.remove(exit.pid, exit.boottime);
-                    }
+          if let Ok(Some(crash_id)) = db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await {
+              if let Ok(data) = db.get_crash_report_data(crash_id).await {
+                  match report::save_from_db(&output_dir, &data) {
+                      Ok(path) => info!("Report saved: {}", path.display()),
+                      Err(e) => log::error!("Failed to save report: {e}"),
+                  }
+              }
+          } else {
+              // Clean exit, no crash — cleanup DB
+              let _ = db.cleanup_process(exit.pid, exit.boottime).await;
+          }
+          memory_map.remove(exit.pid, exit.boottime);                     }
                     Event::ArtifactReady(artifact) => {
                         debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, String::from_utf8(artifact.filename.to_vec()).unwrap());
                     }
@@ -131,6 +149,7 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 async fn handle_signal_deliver_event(
+    db: &CrashDb,
     event: &SignalDeliverEvent,
     stacks: &StackTraceMap<aya::maps::MapData>,
     stack_dumps: &mut HashMap<aya::maps::MapData, StackDumpKey, StackDump>,
@@ -155,6 +174,13 @@ async fn handle_signal_deliver_event(
     let _ = stack_dumps.remove(&dump_key);
 
     let process_info = map.get(event.pid, event.boottime);
+
+    if let Err(e) = db
+        .insert_crash(&event, stack_trace.as_ref(), stack_dump.as_ref())
+        .await
+    {
+        log::error!("DB insert_crash failed: {e}");
+    }
     report::print_to_console(event, stack_trace.as_ref(), process_info);
 
     match report::save_to_file(
