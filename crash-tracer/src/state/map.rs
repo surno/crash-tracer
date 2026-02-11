@@ -20,6 +20,8 @@ pub enum RuntimeKind {
 }
 
 pub struct ProcessInfo {
+    pub pid: u32,
+    pub boottime: u64,
     pub maps: Vec<String>,
     pub runtime: RuntimeKind,
     pub cwd: Option<String>,
@@ -56,7 +58,7 @@ impl MemoryMap {
                 .map(|bytes| {
                     bytes
                         .split(|&b| b == 0)
-                        .filter(|s| s.is_empty())
+                        .filter(|s| !s.is_empty())
                         .map(|s| String::from_utf8_lossy(s).into_owned())
                         .collect::<Vec<_>>()
                         .join(" ")
@@ -65,6 +67,8 @@ impl MemoryMap {
             self.memory_map.insert(
                 MapKey { pid, boottime },
                 ProcessInfo {
+                    pid,
+                    boottime,
                     maps,
                     runtime,
                     cwd,
