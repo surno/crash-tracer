@@ -150,14 +150,15 @@ async fn handle_signal_deliver_event(
     let stack_dump = stack_dumps.get(&dump_key, 0).ok();
     let _ = stack_dumps.remove(&dump_key);
 
-    report::print_to_console(event, stack_trace.as_ref());
+    let process_info = map.get(event.pid, event.boottime);
+    report::print_to_console(event, stack_trace.as_ref(), process_info);
 
     match report::save_to_file(
         output_dir,
         event,
         stack_trace.as_ref(),
         stack_dump.as_ref(),
-        map,
+        process_info,
     ) {
         Ok(path) => println!("\nReport saved: {}", path.display()),
         Err(e) => log::error!("Failed to save report: {}", e),

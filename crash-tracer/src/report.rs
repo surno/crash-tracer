@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use aya::maps::stack_trace::StackTrace;
 use crash_tracer_common::{SignalDeliverEvent, StackDump};
 
-use crate::state::map::MemoryMap;
+use crate::state::map::ProcessInfo;
 
 /// Core formatting — writes a crash report to any `Write` target.
 fn write_report(
@@ -12,7 +12,7 @@ fn write_report(
     event: &SignalDeliverEvent,
     stack_trace: Option<&StackTrace>,
     stack_dump: Option<&StackDump>,
-    map: Option<&Vec<String>>,
+    map: Option<&ProcessInfo>,
 ) -> anyhow::Result<()> {
     let cmd = std::str::from_utf8(&event.cmd)
         .unwrap_or("<unknown>")
@@ -22,7 +22,11 @@ fn write_report(
     writeln!(w, "============")?;
     writeln!(w, "Generated: {}", chrono::Utc::now().to_rfc3339())?;
     writeln!(w)?;
-    writeln!(w, "Process: {} (PID: {}, TID: {})", cmd, event.pid, event.tid)?;
+    writeln!(
+        w,
+        "Process: {} (PID: {}, TID: {})",
+        cmd, event.pid, event.tid
+    )?;
     writeln!(
         w,
         "Signal:  {} ({})",
@@ -40,6 +44,11 @@ fn write_report(
         writeln!(w, "Fault:   0x{:016x}", event.fault_addr)?;
     }
 
+    if let Some(process_info) = map {
+        writeln!(w)?;
+        writeln!(w, "Detected Runtime: {}", process_info.runtime)?;
+    }
+
     writeln!(w)?;
     writeln!(w, "Registers")?;
     writeln!(w, "---------")?;
@@ -48,14 +57,42 @@ fn write_report(
         "  RIP: 0x{:016x}  RFLAGS: 0x{:016x}",
         event.rip, event.rflags
     )?;
-    writeln!(w, "  RSP: 0x{:016x}  RBP:    0x{:016x}", event.rsp, event.rbp)?;
-    writeln!(w, "  RAX: 0x{:016x}  RBX:    0x{:016x}", event.rax, event.rbx)?;
-    writeln!(w, "  RCX: 0x{:016x}  RDX:    0x{:016x}", event.rcx, event.rdx)?;
-    writeln!(w, "  RSI: 0x{:016x}  RDI:    0x{:016x}", event.rsi, event.rdi)?;
+    writeln!(
+        w,
+        "  RSP: 0x{:016x}  RBP:    0x{:016x}",
+        event.rsp, event.rbp
+    )?;
+    writeln!(
+        w,
+        "  RAX: 0x{:016x}  RBX:    0x{:016x}",
+        event.rax, event.rbx
+    )?;
+    writeln!(
+        w,
+        "  RCX: 0x{:016x}  RDX:    0x{:016x}",
+        event.rcx, event.rdx
+    )?;
+    writeln!(
+        w,
+        "  RSI: 0x{:016x}  RDI:    0x{:016x}",
+        event.rsi, event.rdi
+    )?;
     writeln!(w, "  R8:  0x{:016x}  R9:     0x{:016x}", event.r8, event.r9)?;
-    writeln!(w, "  R10: 0x{:016x}  R11:    0x{:016x}", event.r10, event.r11)?;
-    writeln!(w, "  R12: 0x{:016x}  R13:    0x{:016x}", event.r12, event.r13)?;
-    writeln!(w, "  R14: 0x{:016x}  R15:    0x{:016x}", event.r14, event.r15)?;
+    writeln!(
+        w,
+        "  R10: 0x{:016x}  R11:    0x{:016x}",
+        event.r10, event.r11
+    )?;
+    writeln!(
+        w,
+        "  R12: 0x{:016x}  R13:    0x{:016x}",
+        event.r12, event.r13
+    )?;
+    writeln!(
+        w,
+        "  R14: 0x{:016x}  R15:    0x{:016x}",
+        event.r14, event.r15
+    )?;
 
     if let Some(trace) = stack_trace {
         writeln!(w)?;
@@ -108,11 +145,11 @@ fn write_report(
         }
     }
 
-    if let Some(maps) = map {
+    if let Some(process_info) = map {
         writeln!(w)?;
         writeln!(w, "Memory Maps")?;
         writeln!(w, "-----------")?;
-        for line in maps {
+        for line in &process_info.maps {
             writeln!(w, "{}", line)?;
         }
     }
@@ -127,7 +164,7 @@ pub fn save_to_file(
     event: &SignalDeliverEvent,
     stack_trace: Option<&StackTrace>,
     stack_dump: Option<&StackDump>,
-    map: &MemoryMap,
+    process_info: Option<&ProcessInfo>,
 ) -> anyhow::Result<PathBuf> {
     let cmd = std::str::from_utf8(&event.cmd)
         .unwrap_or("<unknown>")
@@ -137,13 +174,12 @@ pub fn save_to_file(
     let filename = format!("crash_{}_{}_{}.txt", cmd, event.pid, timestamp);
     let filepath = output_dir.join(&filename);
 
-    let maps = map.get(event.pid, event.boottime);
-    if maps.is_none() {
+    if process_info.is_none() {
         log::error!("No memory map for: {}", event.pid);
     }
 
     let mut file = std::fs::File::create(&filepath)?;
-    write_report(&mut file, event, stack_trace, stack_dump, maps)?;
+    write_report(&mut file, event, stack_trace, stack_dump, process_info)?;
 
     Ok(filepath)
 }
@@ -152,10 +188,11 @@ pub fn save_to_file(
 pub fn print_to_console(
     event: &SignalDeliverEvent,
     stack_trace: Option<&StackTrace>,
+    process_info: Option<&ProcessInfo>,
 ) {
     let mut stdout = std::io::stdout().lock();
     // Console output omits memory maps and raw stack (they can be very long)
-    if let Err(e) = write_report(&mut stdout, event, stack_trace, None, None) {
+    if let Err(e) = write_report(&mut stdout, event, stack_trace, None, process_info) {
         log::error!("Failed to write to stdout: {}", e);
     }
 }
