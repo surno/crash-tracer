@@ -13,6 +13,7 @@ use crate::state::map::MemoryMap;
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use aya::maps::{HashMap, RingBuf, StackTraceMap};
 use aya_log::EbpfLogger;
 use clap::Parser;
@@ -127,8 +128,10 @@ async fn main() -> Result<(), anyhow::Error> {
                         debug!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
                         memory_map.insert(exec.pid, exec.boottime);
                         if let Some(info) = memory_map.get(exec.pid, exec.boottime) {
-                            if let Err(e) = db.insert_process(info).await {
-                                log::error!("DB insert_process failed: {e}");
+                            if let Err(e) = db.insert_process(info).await
+                                .with_context(|| format!("inserting process pid={}", exec.pid))
+                            {
+                                log::error!("{e:#}");
                             }
                         }
                     }
@@ -138,22 +141,30 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
-         match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await {
+         match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await
+             .with_context(|| format!("completing crash pid={}", exit.pid))
+         {
             Ok(Some(crash_id)) => {
-              match db.get_crash_report_data(crash_id).await {
-                  Ok(data) => match report::save_from_db(&output_dir, &data) {
+              match db.get_crash_report_data(crash_id).await
+                  .with_context(|| format!("retrieving report data crash_id={}", crash_id))
+              {
+                  Ok(data) => match report::save_from_db(&output_dir, &data)
+                      .context("writing report file")
+                  {
                       Ok(path) => info!("Report saved: {}", path.display()),
-                      Err(e) => log::error!("Failed to save report: {e}"),
+                      Err(e) => log::error!("{e:#}"),
                   },
-                  Err(e) => log::error!("Failed to retrieve crash report data for crash_id={}: {e}", crash_id),
+                  Err(e) => log::error!("{e:#}"),
               }
             }
             Ok(None) => {
-                  if let Err(e) = db.cleanup_process(exit.pid, exit.boottime).await {
-                      log::error!("Failed to cleanup process pid={}: {e}", exit.pid);
+                  if let Err(e) = db.cleanup_process(exit.pid, exit.boottime).await
+                      .with_context(|| format!("cleaning up process pid={}", exit.pid))
+                  {
+                      log::error!("{e:#}");
                   }
             }
-            Err(e) => log::error!("complete_crash failed: {e}"),
+            Err(e) => log::error!("{e:#}"),
         }
 
           memory_map.remove(exit.pid, exit.boottime);                     }
@@ -201,8 +212,9 @@ async fn handle_signal_deliver_event(
     if let Err(e) = db
         .insert_crash(&event, stack_trace.as_ref(), stack_dump.as_ref())
         .await
+        .with_context(|| format!("inserting crash pid={} sig={}", event.pid, event.signal))
     {
-        log::error!("DB insert_crash failed: {e}");
+        log::error!("{e:#}");
     }
     // Console output for real-time feedback; file report is generated on exit from DB
     report::print_to_console(event, stack_trace.as_ref(), process_info);
