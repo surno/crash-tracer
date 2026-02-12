@@ -384,14 +384,42 @@ impl CrashDb {
 
         let process_id: i64 = row.try_get("id")?;
 
+        let crash_ids: Vec<i64> = sqlx::query("SELECT id FROM crashes WHERE process_id=$1")
+            .bind(process_id)
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .filter_map(|r| r.try_get("id").ok())
+            .collect();
+
         let mut tx = self.pool.begin().await?;
+
+        for crash_id in &crash_ids {
+            sqlx::query("DELETE FROM stack_frames WHERE crash_id=$1")
+                .bind(crash_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM stack_dumps WHERE crash_id=$1")
+                .bind(crash_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM artifacts WHERE crash_id=$1")
+                .bind(crash_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        sqlx::query("DELETE FROM crashes WHERE process_id=$1")
+            .bind(process_id)
+            .execute(&mut *tx)
+            .await?;
 
         sqlx::query("DELETE FROM memory_maps WHERE process_id=$1")
             .bind(process_id)
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("DELETE FROM processes WHERE id = $1")
+        sqlx::query("DELETE FROM processes WHERE id=$1")
             .bind(process_id)
             .execute(&mut *tx)
             .await?;
