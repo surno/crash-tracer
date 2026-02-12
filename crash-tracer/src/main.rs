@@ -135,7 +135,8 @@ async fn main() -> Result<(), anyhow::Error> {
           }
           memory_map.remove(exit.pid, exit.boottime);                     }
                     Event::ArtifactReady(artifact) => {
-                        debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, String::from_utf8(artifact.filename.to_vec()).unwrap());
+                        debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, std::str::from_utf8(&artifact.filename[..artifact.filename_len as usize])
+      .unwrap_or("<invalid>"));
                     }
                 }
             }
