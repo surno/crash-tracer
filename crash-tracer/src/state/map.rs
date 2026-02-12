@@ -57,36 +57,42 @@ impl MemoryMap {
                 .retain(|key, _| std::fs::metadata(format!("/proc/{}", key.pid)).is_ok());
         }
 
-        if let Ok(maps) = self.read_map(pid) {
-            let runtime = self.detect_runtime(&maps);
+        let maps = match self.read_map(pid) {
+            Ok(maps) => maps,
+            Err(e) => {
+                log::warn!("Failed to read /proc/{}/maps: {e}", pid);
+                return;
+            }
+        };
 
-            let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid))
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned());
+        let runtime = self.detect_runtime(&maps);
 
-            let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid))
-                .ok()
-                .map(|bytes| {
-                    bytes
-                        .split(|&b| b == 0)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| String::from_utf8_lossy(s).into_owned())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                });
+        let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
 
-            self.memory_map.insert(
-                MapKey { pid, boottime },
-                ProcessInfo {
-                    pid,
-                    boottime,
-                    maps,
-                    runtime,
-                    cwd,
-                    cmdline,
-                },
-            );
-        }
+        let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid))
+            .ok()
+            .map(|bytes| {
+                bytes
+                    .split(|&b| b == 0)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| String::from_utf8_lossy(s).into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+
+        self.memory_map.insert(
+            MapKey { pid, boottime },
+            ProcessInfo {
+                pid,
+                boottime,
+                maps,
+                runtime,
+                cwd,
+                cmdline,
+            },
+        );
     }
 
     pub fn get(&self, pid: u32, boottime: u64) -> Option<&ProcessInfo> {

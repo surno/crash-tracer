@@ -140,15 +140,18 @@ async fn main() -> Result<(), anyhow::Error> {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
          match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await {
             Ok(Some(crash_id)) => {
-              if let Ok(data) = db.get_crash_report_data(crash_id).await {
-                  match report::save_from_db(&output_dir, &data) {
+              match db.get_crash_report_data(crash_id).await {
+                  Ok(data) => match report::save_from_db(&output_dir, &data) {
                       Ok(path) => info!("Report saved: {}", path.display()),
                       Err(e) => log::error!("Failed to save report: {e}"),
-                  }
+                  },
+                  Err(e) => log::error!("Failed to retrieve crash report data for crash_id={}: {e}", crash_id),
               }
             }
             Ok(None) => {
-                  let _ = db.cleanup_process(exit.pid, exit.boottime).await;
+                  if let Err(e) = db.cleanup_process(exit.pid, exit.boottime).await {
+                      log::error!("Failed to cleanup process pid={}: {e}", exit.pid);
+                  }
             }
             Err(e) => log::error!("complete_crash failed: {e}"),
         }
