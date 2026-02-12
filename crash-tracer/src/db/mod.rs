@@ -78,7 +78,7 @@ impl CrashDb {
     pub async fn insert_process(&self, info: &ProcessInfo) -> anyhow::Result<i64> {
         let mut tx = self.pool.begin().await?;
 
-        let result = sqlx::query(INSERT_PROCESS)
+        sqlx::query(INSERT_PROCESS)
             .bind(info.pid as i64)
             .bind(info.boottime as i64)
             .bind(info.runtime.to_string())
@@ -87,7 +87,18 @@ impl CrashDb {
             .execute(&mut *tx)
             .await?;
 
-        let id = result.last_insert_rowid();
+        let row = sqlx::query("SELECT id FROM processes WHERE pid=$1 AND boottime=$2")
+            .bind(info.pid as i64)
+            .bind(info.boottime as i64)
+            .fetch_one(&mut *tx)
+            .await?;
+        let id: i64 = row.try_get("id")?;
+
+        // Clear old maps in case this is a re-exec with updated mappings
+        sqlx::query("DELETE FROM memory_maps WHERE process_id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
 
         for (idx, map) in info.maps.iter().enumerate() {
             sqlx::query(INSERT_PROCESS_MAPS)

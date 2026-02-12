@@ -1,5 +1,5 @@
 pub const INSERT_PROCESS: &str =
-    "INSERT INTO processes (pid, boottime, runtime, cwd, cmdline) VALUES ( $1, $2, $3, $4, $5 );";
+    "INSERT INTO processes (pid, boottime, runtime, cwd, cmdline) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(pid, boottime) DO UPDATE SET runtime=excluded.runtime, cwd=excluded.cwd, cmdline=excluded.cmdline";
 
 pub const INSERT_PROCESS_MAPS: &str =
     "INSERT INTO memory_maps (process_id, line_num, content) VALUES ($1, $2, $3)";
