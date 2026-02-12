@@ -9,7 +9,7 @@ use crate::{programs::CRASH_TRACER_EVENTS, vmlinux};
 pub fn try_handle_sched_process_exec(ctx: TracePointContext) -> Result<(), i64> {
     let task: *const task_struct = unsafe { bpf_get_current_task_btf() as *const task_struct };
     let start_boottime = unsafe { (*task).start_boottime };
-    let pid = unsafe { (*task).pid } as u32;
+    let pid = unsafe { (*task).tgid } as u32;
 
     let mut entry = match CRASH_TRACER_EVENTS.reserve::<CrashTracerEvent>(0) {
         Some(e) => e,

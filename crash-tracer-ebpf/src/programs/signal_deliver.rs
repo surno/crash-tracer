@@ -42,8 +42,8 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
     let mut event = SignalDeliverEvent::zeroed();
     unsafe {
         let pid_tgid = bpf_get_current_pid_tgid();
-        event.pid = pid_tgid as u32;
-        event.tid = (pid_tgid >> 32) as u32;
+        event.tid = pid_tgid as u32;
+        event.pid = (pid_tgid >> 32) as u32;
         event.signal = signal;
         event.si_code = si_code;
         event.timestamp_ns = bpf_ktime_get_ns();
