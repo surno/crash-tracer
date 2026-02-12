@@ -122,17 +122,21 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
-          if let Ok(Some(crash_id)) = db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await {
+         match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await {
+            Ok(Some(crash_id)) => {
               if let Ok(data) = db.get_crash_report_data(crash_id).await {
                   match report::save_from_db(&output_dir, &data) {
                       Ok(path) => info!("Report saved: {}", path.display()),
                       Err(e) => log::error!("Failed to save report: {e}"),
                   }
               }
-          } else {
-              // Clean exit, no crash — cleanup DB
-              let _ = db.cleanup_process(exit.pid, exit.boottime).await;
-          }
+            }
+            Ok(None) => {
+                  let _ = db.cleanup_process(exit.pid, exit.boottime).await;
+            }
+            Err(e) => log::error!("complete_crash failed: {e}"),
+        }
+
           memory_map.remove(exit.pid, exit.boottime);                     }
                     Event::ArtifactReady(artifact) => {
                         debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, std::str::from_utf8(&artifact.filename[..artifact.filename_len as usize])
