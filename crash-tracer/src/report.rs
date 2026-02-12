@@ -158,33 +158,6 @@ fn write_report(
     Ok(())
 }
 
-/// Save a crash report to a timestamped file in the output directory.
-/// Returns the path of the created file.
-pub fn save_to_file(
-    output_dir: &Path,
-    event: &SignalDeliverEvent,
-    stack_trace: Option<&StackTrace>,
-    stack_dump: Option<&StackDump>,
-    process_info: Option<&ProcessInfo>,
-) -> anyhow::Result<PathBuf> {
-    let cmd = std::str::from_utf8(&event.cmd)
-        .unwrap_or("<unknown>")
-        .trim_end_matches('\0');
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("crash_{}_{}_{}.txt", cmd, event.pid, timestamp);
-    let filepath = output_dir.join(&filename);
-
-    if process_info.is_none() {
-        log::error!("No memory map for: {}", event.pid);
-    }
-
-    let mut file = std::fs::File::create(&filepath)?;
-    write_report(&mut file, event, stack_trace, stack_dump, process_info)?;
-
-    Ok(filepath)
-}
-
 /// Print a crash summary to stdout.
 pub fn print_to_console(
     event: &SignalDeliverEvent,

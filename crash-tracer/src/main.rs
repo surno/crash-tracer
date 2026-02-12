@@ -118,7 +118,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                     Event::SignalDeliver(signal) => {
                         debug!("signal event: pid={}, boottime={}", signal.pid, signal.boottime);
-                        handle_signal_deliver_event(&db, &signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map, &output_dir).await;
+                        handle_signal_deliver_event(&db, &signal, &signal_deliver_stacks, &mut stack_dumps, &memory_map).await;
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
@@ -159,7 +159,6 @@ async fn handle_signal_deliver_event(
     stacks: &StackTraceMap<aya::maps::MapData>,
     stack_dumps: &mut HashMap<aya::maps::MapData, StackDumpKey, StackDump>,
     map: &MemoryMap,
-    output_dir: &std::path::Path,
 ) {
     info!("\n{}", "=".repeat(60));
     info!("CRASH DETECTED");
@@ -186,16 +185,6 @@ async fn handle_signal_deliver_event(
     {
         log::error!("DB insert_crash failed: {e}");
     }
+    // Console output for real-time feedback; file report is generated on exit from DB
     report::print_to_console(event, stack_trace.as_ref(), process_info);
-
-    match report::save_to_file(
-        output_dir,
-        event,
-        stack_trace.as_ref(),
-        stack_dump.as_ref(),
-        process_info,
-    ) {
-        Ok(path) => println!("\nReport saved: {}", path.display()),
-        Err(e) => log::error!("Failed to save report: {}", e),
-    }
 }
