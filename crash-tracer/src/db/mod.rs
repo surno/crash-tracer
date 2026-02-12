@@ -321,20 +321,24 @@ impl CrashDb {
 
         let stack_frames: Vec<u64> = frame_rows
             .iter()
-            .map(|r| r.try_get::<i64, _>("ip").unwrap_or(0) as u64)
-            .collect();
+            .map(|r| Ok(r.try_get::<i64, _>("ip")? as u64))
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
-        let stack_dump =
-            sqlx::query("SELECT rsp, length, data FROM stack_dumps WHERE crash_id = $1")
-                .bind(crash_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .map(|r| {
-                    let rsp = r.try_get::<i64, _>("rsp").unwrap_or(0) as u64;
-                    let len = r.try_get::<i32, _>("length").unwrap_or(0) as usize;
-                    let data: Vec<u8> = r.try_get("data").unwrap_or_default();
-                    (rsp, data[..len.min(data.len())].to_vec())
-                });
+        let stack_dump = match sqlx::query(
+            "SELECT rsp, length, data FROM stack_dumps WHERE crash_id = $1",
+        )
+        .bind(crash_id)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            Some(r) => {
+                let rsp = r.try_get::<i64, _>("rsp")? as u64;
+                let len = r.try_get::<i32, _>("length")? as usize;
+                let data: Vec<u8> = r.try_get("data")?;
+                Some((rsp, data[..len.min(data.len())].to_vec()))
+            }
+            None => None,
+        };
 
         let map_rows = sqlx::query(
             "SELECT content FROM memory_maps WHERE process_id = $1 ORDER BY line_num ASC",
@@ -345,8 +349,8 @@ impl CrashDb {
 
         let memory_maps: Vec<String> = map_rows
             .iter()
-            .filter_map(|r| r.try_get("content").ok())
-            .collect();
+            .map(|r| r.try_get("content"))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let artifact_rows =
             sqlx::query("SELECT filename, full_path, content FROM artifacts WHERE crash_id = $1")
@@ -356,12 +360,14 @@ impl CrashDb {
 
         let artifacts: Vec<ArtifactData> = artifact_rows
             .iter()
-            .map(|r| ArtifactData {
-                filename: r.try_get("filename").unwrap_or_default(),
-                full_path: r.try_get("full_path").unwrap_or_default(),
-                content: r.try_get("content").ok(),
+            .map(|r| {
+                Ok(ArtifactData {
+                    filename: r.try_get("filename")?,
+                    full_path: r.try_get("full_path")?,
+                    content: r.try_get("content").ok(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
         let exit_code: Option<i32> = crash_row.try_get("exit_code").ok();
 
