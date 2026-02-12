@@ -1,5 +1,6 @@
-pub const SCHEMA: &str = "                                                                                                                                                                
-      PRAGMA journal_mode=WAL;                                                                                                                                                                  
+pub const SCHEMA: &str = "
+      PRAGMA journal_mode=WAL;
+      PRAGMA foreign_keys=ON;
                                                                                                                                                                                                 
       CREATE TABLE IF NOT EXISTS processes (                                                                                                                                                    
           id          INTEGER PRIMARY KEY AUTOINCREMENT,                                                                                                                                        
