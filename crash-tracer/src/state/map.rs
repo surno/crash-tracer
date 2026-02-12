@@ -34,6 +34,8 @@ struct MapKey {
     pid: u32,
     boottime: u64,
 }
+const MAX_TRACKED_PROCESSES: usize = 4096;
+
 pub struct MemoryMap {
     memory_map: HashMap<MapKey, ProcessInfo>,
 }
@@ -46,6 +48,15 @@ impl MemoryMap {
     }
 
     pub fn insert(&mut self, pid: u32, boottime: u64) {
+        if self.memory_map.len() >= MAX_TRACKED_PROCESSES {
+            log::warn!(
+                "Memory map exceeded {} entries, pruning stale entries",
+                MAX_TRACKED_PROCESSES
+            );
+            self.memory_map
+                .retain(|key, _| std::fs::metadata(format!("/proc/{}", key.pid)).is_ok());
+        }
+
         if let Ok(maps) = self.read_map(pid) {
             let runtime = self.detect_runtime(&maps);
 
