@@ -74,7 +74,13 @@ async fn main() -> Result<(), anyhow::Error> {
                 tokio::io::unix::AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)?;
             tokio::task::spawn(async move {
                 loop {
-                    let mut guard = logger.readable_mut().await.unwrap();
+                    let mut guard = match logger.readable_mut().await {
+                        Ok(guard) => guard,
+                        Err(e) => {
+                            log::error!("eBPF logger fd error, stopping log drain: {e}");
+                            break;
+                        }
+                    };
                     guard.get_inner_mut().flush();
                     guard.clear_ready();
                 }
