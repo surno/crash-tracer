@@ -24,6 +24,9 @@ static SIGNAL_DELIVER_STACKS: StackTrace = StackTrace::with_max_entries(1024, 0)
 #[map]
 static STACK_DUMP_SCRATCH: PerCpuArray<StackDump> = PerCpuArray::with_max_entries(1, 0);
 
+#[map]
+static SIGNAL_EVENT_SCRATCH: PerCpuArray<SignalDeliverEvent> = PerCpuArray::with_max_entries(1, 0);
+
 pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i64> {
     // For signal:signal_deliver tracepoint, the signal number is at offset 8
     // See: /sys/kernel/debug/tracing/events/signal/signal_deliver/format
@@ -39,7 +42,11 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
 
     let task: *const task_struct = unsafe { bpf_get_current_task_btf() as *const task_struct };
 
-    let mut event = SignalDeliverEvent::zeroed();
+    let Some(event) = SIGNAL_EVENT_SCRATCH.get_ptr_mut(0) else {
+        return Ok(());
+    };
+    let event = unsafe { &mut *event };
+    *event = SignalDeliverEvent::zeroed();
     unsafe {
         let pid_tgid = bpf_get_current_pid_tgid();
         event.tid = pid_tgid as u32;
@@ -115,7 +122,7 @@ pub unsafe fn try_handle_signal_deliver(ctx: TracePointContext) -> Result<(), i6
         boottime: event.boottime,
     };
 
-    let _ = PENDING_SIGNALS.insert(&key, event, 0);
+    let _ = PENDING_SIGNALS.insert(&key, *event, 0);
 
     Ok(())
 }

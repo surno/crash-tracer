@@ -190,7 +190,7 @@ impl CrashDb {
                 .bind(crash_id)
                 .bind(dump.rsp as i64)
                 .bind(dump.len)
-                .bind(&dump.data[..])
+                .bind(&dump.data[..dump.len as usize])
                 .execute(&mut *tx)
                 .await?;
         }
@@ -324,21 +324,20 @@ impl CrashDb {
             .map(|r| Ok(r.try_get::<i64, _>("ip")? as u64))
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
-        let stack_dump = match sqlx::query(
-            "SELECT rsp, length, data FROM stack_dumps WHERE crash_id = $1",
-        )
-        .bind(crash_id)
-        .fetch_optional(&self.pool)
-        .await?
-        {
-            Some(r) => {
-                let rsp = r.try_get::<i64, _>("rsp")? as u64;
-                let len = r.try_get::<i32, _>("length")? as usize;
-                let data: Vec<u8> = r.try_get("data")?;
-                Some((rsp, data[..len.min(data.len())].to_vec()))
-            }
-            None => None,
-        };
+        let stack_dump =
+            match sqlx::query("SELECT rsp, length, data FROM stack_dumps WHERE crash_id = $1")
+                .bind(crash_id)
+                .fetch_optional(&self.pool)
+                .await?
+            {
+                Some(r) => {
+                    let rsp = r.try_get::<i64, _>("rsp")? as u64;
+                    let len = r.try_get::<i32, _>("length")? as usize;
+                    let data: Vec<u8> = r.try_get("data")?;
+                    Some((rsp, data[..len.min(data.len())].to_vec()))
+                }
+                None => None,
+            };
 
         let map_rows = sqlx::query(
             "SELECT content FROM memory_maps WHERE process_id = $1 ORDER BY line_num ASC",

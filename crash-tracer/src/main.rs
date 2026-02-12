@@ -9,7 +9,7 @@ mod state;
 use crate::db::CrashDb;
 use crate::event::unified_source::UnifiedEventSource;
 use crate::event::{Event, EventSource};
-use crate::state::map::MemoryMap;
+use crate::state::map::{MemoryMap, RuntimeKind};
 
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ use anyhow::Context;
 use aya::maps::{HashMap, RingBuf, StackTraceMap};
 use aya_log::EbpfLogger;
 use clap::Parser;
-use crash_tracer_common::{SignalDeliverEvent, StackDump, StackDumpKey};
+use crash_tracer_common::{FdTrackKey, SignalDeliverEvent, StackDump, StackDumpKey};
 use log::{debug, info, warn};
 use tokio::signal;
 
@@ -110,6 +110,17 @@ async fn main() -> Result<(), anyhow::Error> {
             .ok_or_else(|| anyhow::anyhow!("eBPF map not found: STACK_DUMP_MAP"))?,
     )?;
 
+    let mut tracked_pids: HashMap<_, u32, u32> = HashMap::try_from(
+        bpf.take_map("TRACKED_PIDS")
+            .ok_or_else(|| anyhow::anyhow!("eBPF map not found: TRACKED_PIDS"))?,
+    )?;
+    // Hold the map handle so eBPF programs can use it; not accessed from userspace
+    let _tracked_fds: HashMap<_, FdTrackKey, crash_tracer_common::ArtifactInfo> =
+        HashMap::try_from(
+            bpf.take_map("TRACKED_FDS")
+                .ok_or_else(|| anyhow::anyhow!("eBPF map not found: TRACKED_FDS"))?,
+        )?;
+
     let output_dir = args.output_dir.clone();
     let mut memory_map = MemoryMap::new();
 
@@ -128,6 +139,11 @@ async fn main() -> Result<(), anyhow::Error> {
                         debug!("exec event: pid={}, boottime={}", exec.pid, exec.boottime);
                         memory_map.insert(exec.pid, exec.boottime);
                         if let Some(info) = memory_map.get(exec.pid, exec.boottime) {
+                            if info.runtime != RuntimeKind::Native {
+                                if let Err(e) = tracked_pids.insert(exec.pid, info.runtime.to_id(), 0) {
+                                    log::warn!("Failed to insert into TRACKED_PIDS for pid={}: {e}", exec.pid);
+                                }
+                            }
                             if let Err(e) = db.insert_process(info).await
                                 .with_context(|| format!("inserting process pid={}", exec.pid))
                             {
@@ -141,33 +157,35 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                     Event::SchedExit(exit) => {
                         debug!("exit event: pid={}, boottime={} exit_code={}", exit.pid, exit.boottime, exit.exit_code);
-         match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await
-             .with_context(|| format!("completing crash pid={}", exit.pid))
-         {
-            Ok(Some(crash_id)) => {
-              match db.get_crash_report_data(crash_id).await
-                  .with_context(|| format!("retrieving report data crash_id={}", crash_id))
-              {
-                  Ok(data) => match report::save_from_db(&output_dir, &data)
-                      .context("writing report file")
-                  {
-                      Ok(path) => info!("Report saved: {}", path.display()),
-                      Err(e) => log::error!("{e:#}"),
-                  },
-                  Err(e) => log::error!("{e:#}"),
-              }
-            }
-            Ok(None) => {
-                  if let Err(e) = db.cleanup_process(exit.pid, exit.boottime).await
-                      .with_context(|| format!("cleaning up process pid={}", exit.pid))
-                  {
-                      log::error!("{e:#}");
-                  }
-            }
-            Err(e) => log::error!("{e:#}"),
-        }
+                        match db.complete_crash(exit.pid, exit.boottime, exit.exit_code).await
+                            .with_context(|| format!("completing crash pid={}", exit.pid))
+                        {
+                            Ok(Some(crash_id)) => {
 
-          memory_map.remove(exit.pid, exit.boottime);                     }
+                            match db.get_crash_report_data(crash_id).await
+                                .with_context(|| format!("retrieving report data crash_id={}", crash_id))
+                            {
+                                Ok(data) => match report::save_from_db(&output_dir, &data)
+                                    .context("writing report file")
+                                {
+                                    Ok(path) => info!("Report saved: {}", path.display()),
+                                    Err(e) => log::error!("{e:#}"),
+                                },
+                                Err(e) => log::error!("{e:#}"),
+                            }
+                            }
+                            Ok(None) => {
+                                if let Err(e) = db.cleanup_process(exit.pid, exit.boottime).await
+                                    .with_context(|| format!("cleaning up process pid={}", exit.pid))
+                                {
+                                    log::error!("{e:#}");
+                                }
+                            }
+                            Err(e) => log::error!("{e:#}"),
+                        }
+                        let _ = tracked_pids.remove(&exit.pid);
+                        memory_map.remove(exit.pid, exit.boottime);
+                    }
                     Event::ArtifactReady(artifact) => {
                         debug!("artifact event: pid={}, boottime={}, file={}", artifact.pid, artifact.boottime, std::str::from_utf8(&artifact.filename[..artifact.filename_len as usize])
       .unwrap_or("<invalid>"));
