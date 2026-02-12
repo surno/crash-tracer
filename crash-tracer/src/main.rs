@@ -1,3 +1,6 @@
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("crash-tracer currently only supports x86_64");
+
 mod db;
 mod ebpf;
 mod event;
