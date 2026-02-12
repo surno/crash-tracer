@@ -38,7 +38,7 @@ pub fn try_handle_sched_process_exit(ctx: TracePointContext) -> Result<(), i64> 
                 };
             }
             _ => {
-                // no entry was found. Should be fine.
+                let _ = STACK_DUMP_MAP.remove(StackDumpKey { pid, tid, boottime });
             }
         }
     } else {
