@@ -90,11 +90,18 @@ async fn main() -> Result<(), anyhow::Error> {
     let db = db::CrashDb::new(&db_path).await?;
 
     // Get handles to maps - now using unified ring buffer
-    let events = RingBuf::try_from(bpf.take_map("CRASH_TRACER_EVENTS").unwrap())?;
-    let signal_deliver_stacks =
-        StackTraceMap::try_from(bpf.take_map("SIGNAL_DELIVER_STACKS").unwrap())?;
-    let mut stack_dumps: HashMap<_, StackDumpKey, StackDump> =
-        HashMap::try_from(bpf.take_map("STACK_DUMP_MAP").unwrap())?;
+    let events = RingBuf::try_from(
+        bpf.take_map("CRASH_TRACER_EVENTS")
+            .ok_or_else(|| anyhow::anyhow!("eBPF map not found: CRASH_TRACER_EVENTS"))?,
+    )?;
+    let signal_deliver_stacks = StackTraceMap::try_from(
+        bpf.take_map("SIGNAL_DELIVER_STACKS")
+            .ok_or_else(|| anyhow::anyhow!("eBPF map not found: SIGNAL_DELIVER_STACKS"))?,
+    )?;
+    let mut stack_dumps: HashMap<_, StackDumpKey, StackDump> = HashMap::try_from(
+        bpf.take_map("STACK_DUMP_MAP")
+            .ok_or_else(|| anyhow::anyhow!("eBPF map not found: STACK_DUMP_MAP"))?,
+    )?;
 
     let output_dir = args.output_dir.clone();
     let mut memory_map = MemoryMap::new();
