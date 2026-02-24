@@ -1,4 +1,5 @@
 /target
+hs_err_pid*
 
 crash
 crash.c

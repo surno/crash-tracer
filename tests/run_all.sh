@@ -7,6 +7,7 @@
 #   ./tests/run_all.sh native    Run only native tests
 #   ./tests/run_all.sh node      Run only Node.js tests
 #   ./tests/run_all.sh python    Run only Python tests
+#   ./tests/run_all.sh java      Run only Java tests
 #
 # Run crash-tracer in another terminal first:
 #   sudo ./target/debug/crash-tracer --verbose
@@ -17,6 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/native/bin"
+JAVA_BUILD_DIR="$SCRIPT_DIR/java/bin"
 DELAY=1  # seconds between tests so crash-tracer output is readable
 
 RED='\033[0;31m'
@@ -129,6 +131,38 @@ run_python() {
     run_test "python/kill_self (SIGSEGV via os.kill)"                  signal    python3 "$SCRIPT_DIR/python/kill_self.py"
 }
 
+build_java() {
+    echo -e "${BOLD}Building Java test programs...${RESET}"
+    mkdir -p "$JAVA_BUILD_DIR"
+
+    for src in "$SCRIPT_DIR"/java/*.java; do
+        local name
+        name="$(basename "$src" .java)"
+        javac -d "$JAVA_BUILD_DIR" "$src"
+        echo "  Built: $name"
+    done
+    echo ""
+}
+
+run_java() {
+    echo ""
+    echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}║  JAVA (HotSpot) TESTS                                      ║${RESET}"
+    echo -e "${BOLD}║  JVM crashes produce hs_err_pid files — the primary         ║${RESET}"
+    echo -e "${BOLD}║  artifact crash-tracer tracks for Java.                     ║${RESET}"
+    echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${RESET}"
+
+    build_java
+
+    run_test "java/uncaught_exception (RuntimeException - no signal)"    no_signal java -cp "$JAVA_BUILD_DIR" UncaughtException
+    run_test "java/stack_overflow (JVM catches internally)"              no_signal java -cp "$JAVA_BUILD_DIR" StackOverflow
+    run_test "java/abort (Runtime.halt - SIGABRT)"                       signal    java -cp "$JAVA_BUILD_DIR" Abort
+    run_test "java/segfault_unsafe (Unsafe null deref - SIGSEGV)"        signal    java -cp "$JAVA_BUILD_DIR" SegfaultUnsafe
+    run_test "java/kill_self (kill -SEGV self - SIGSEGV)"                signal    java -cp "$JAVA_BUILD_DIR" KillSelf
+    run_test "java/oom_crash (OOM + CrashOnOOM - SIGABRT)"               signal    java -XX:+CrashOnOutOfMemoryError -Xmx32m -cp "$JAVA_BUILD_DIR" OomCrash
+    run_test "java/hs_err_artifact (SIGSEGV + hs_err_pid artifact)"      signal    java -XX:ErrorFile=/tmp/crash-tracer/hs_err_pid%p.log -cp "$JAVA_BUILD_DIR" HsErrArtifact
+}
+
 # --- Main ---
 
 echo -e "${BOLD}crash-tracer runtime test suite${RESET}"
@@ -141,10 +175,12 @@ case "$filter" in
     native)  run_native ;;
     node)    run_node ;;
     python)  run_python ;;
+    java)    run_java ;;
     all)
         run_native
         run_node
         run_python
+        run_java
         echo ""
         echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo -e "${BOLD}ALL TESTS COMPLETE${RESET}"
@@ -156,12 +192,14 @@ case "$filter" in
         echo "           (NOT: uncaught_exception, unhandled_rejection, stack_overflow)"
         echo "  Python:  segfault_ctypes, faulthandler_crash, abort_signal, kill_self"
         echo "           (NOT: unhandled_exception, stack_overflow)"
+        echo "  Java:    abort, segfault_unsafe, kill_self, oom_crash, hs_err_artifact"
+        echo "           (NOT: uncaught_exception, stack_overflow)"
         echo ""
         echo "Check /tmp/crash-tracer/ for generated crash reports."
         echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         ;;
     *)
-        echo "Usage: $0 [native|node|python|all]"
+        echo "Usage: $0 [native|node|python|java|all]"
         exit 1
         ;;
 esac
